@@ -66,6 +66,15 @@ Given('the user has loaded the test data from the confluence page {string} and f
   if (key) console.log(`📋 Sheet match: requested "${sheetName}" → matched key "${key}" (${(data || []).length} row(s))`);
   else console.warn(`⚠️  Sheet match FAILED for "${sheetName}". Available keys: ${Object.keys(allData).join(' | ')}`);
 
+  // The row this scenario actually asked for. Shared fill steps must prefer this
+  // over pre-loaded sheets (contactUsData, contactDealerData, …) which are loaded
+  // for every scenario and would otherwise win the lookup and supply values from
+  // the wrong sheet.
+  if (Array.isArray(data) && data[0]) {
+    this.activeTestDataRow = data[0];
+    console.log(`📋 Active test-data row: ${Object.keys(data[0]).join(', ')}`);
+  }
+
   if (sheetLower.includes('fleet')) {
     // Fleet Registration test data
     this.fleetData = data.length > 0 ? data : this.fleetData || [];

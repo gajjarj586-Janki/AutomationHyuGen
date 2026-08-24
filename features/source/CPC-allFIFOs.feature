@@ -60,15 +60,16 @@ Feature: Form submission on Hyundai CPC
     And the form modal is displayed
     When the user selects Model from test data
     And clicks Next
-    And the user fills Title from test data
+    Then Your Location Screen is displayed
+    When the user fills postcode from test data
+    And user clicks Next
+    Then Contact details screen is displayed
+    When the user fills Title from test data
     And the user fills first name from test data
     And the user fills last name from test data
     And the user fills email address from test data
     And the user fills phone number from test data
     And the user fills What car model are you currently driving from test data
-    And clicks Next
-    Then Your Location Screen is displayed
-    And user clicks Next
     And the user accepts consent checkbox 1
     And the user accepts consent checkbox 2
     And the user accepts consent checkbox 3

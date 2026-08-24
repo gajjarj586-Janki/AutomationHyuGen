@@ -625,6 +625,7 @@ node scripts/agentOrchestrator.js --skip-fetch --skip-generate
 
 # Headed mode for debugging:
 $env:HEADLESS="false"; node scripts/agentOrchestrator.js --skip-fetch --skip-generate
+$env:HEADLESS="false"; node scripts/agentOrchestrator.js --skip-generate
 ```
 
 On a clean run the generator will print:

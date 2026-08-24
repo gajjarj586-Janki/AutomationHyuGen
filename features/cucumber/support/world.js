@@ -27,6 +27,10 @@ class CucumberWorld {
     this.allExcelRows = null;
     this.validationErrors = null;
     this.successMessage = null;
+    // Free-text note a step can set to explain a non-failure outcome (e.g.
+    // "Driveaway price is not available for this model"). Surfaced in the
+    // report's Summary column by generateReport.js.
+    this.scenarioNote = '';
     this.dropdownOptions = [];
     this._capturedApiPayloads = [];
     this._testUrl = null;
@@ -818,6 +822,7 @@ After(async function (scenario) {
       const metadata = {
         testUrl,
         successMessage: this.successMessage || '',
+        note: this.scenarioNote || '',
         apiStatusCode: formApiCall?.statusCode || null,
         environment: this.environmentName || '',
       };

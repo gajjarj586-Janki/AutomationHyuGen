@@ -211,6 +211,39 @@ function batdModal(page, world) {
   return active;
 }
 
+// ─── Helper: is this element REALLY on screen? ───────────────
+// Playwright's `visible` state ignores `opacity`, and Hyundai pages keep every
+// modal mounted (the closed ones sit at opacity:0 with a full bounding box).
+// So `isVisible()` returns true for inputs inside a closed modal, and a
+// page-wide `.first()` can silently fill an invisible form. Walk the ancestor
+// chain and reject anything inside a faded-out subtree.
+async function isTrulyVisible(locator) {
+  if ((await locator.count().catch(() => 0)) === 0) return false;
+  if (!(await locator.isVisible().catch(() => false))) return false;
+  return await locator.evaluate((el) => {
+    for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
+      if (parseFloat(getComputedStyle(n).opacity || '1') < 0.5) return false;
+    }
+    return true;
+  }).catch(() => false);
+}
+
+// Return the first element matching `selectors` that is truly visible, or null.
+// Polls, because modals fade in — a one-shot check can land mid-transition
+// while opacity is still climbing from 0 and wrongly reject a real field.
+async function firstTrulyVisible(scope, selectors, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const all = scope.locator(selectors);
+    const n = await all.count().catch(() => 0);
+    for (let i = 0; i < n; i++) {
+      if (await isTrulyVisible(all.nth(i))) return all.nth(i);
+    }
+    if (Date.now() >= deadline) return null;
+    await new Promise(r => setTimeout(r, 400));
+  }
+}
+
 // ─── Generic cross-page "fills X from test data" helper ──────
 // Works for BATD/CAD modals AND for non-modal pages (Contact Us, Find a Dealer,
 // etc.). Strategy:
@@ -221,6 +254,9 @@ async function fillFromTestDataGeneric(world, page, opts) {
   const { dataKeys, selectors, label } = opts;
   const norm = s => String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
   const dataSets = [
+    // The sheet this scenario explicitly loaded wins — the others are pre-loaded
+    // for every scenario and would otherwise supply values from the wrong sheet.
+    world.activeTestDataRow,
     world.contactUsData, world.testDriveData, world.contactDealerData, world.bookAServiceData,
     ...(world.allConfluenceData ? Object.values(world.allConfluenceData) : []),
   ].filter(Boolean);
@@ -245,10 +281,15 @@ async function fillFromTestDataGeneric(world, page, opts) {
   // Try inside BATD/CAD modal first if one is visibly active
   const modal = batdModal(page, world);
   const inModal = (await modal.count().catch(() => 0)) > 0 && (await modal.first().isVisible().catch(() => false));
-  let target = inModal ? modal.locator(selectors).first() : page.locator(selectors).first();
-  if ((await target.count().catch(() => 0)) === 0 || !(await target.isVisible().catch(() => false))) {
-    target = page.locator(selectors).first();
+  let target = inModal ? await firstTrulyVisible(modal, selectors, 5000) : null;
+  if (!target) {
+    // Page-wide fallback — but only ever accept a field that is genuinely on
+    // screen, never one parked inside a closed (opacity:0) modal.
+    target = await firstTrulyVisible(page, selectors, 8000);
   }
+  assert.ok(target,
+    `No visible "${label}" field found on the current screen (selectors: ${selectors}). ` +
+    `The form may be on a different step of the modal than the scenario expects.`);
   await target.waitFor({ state: 'visible', timeout: 10000 });
   const tag = (await target.evaluate(e => e.tagName).catch(() => '')).toLowerCase();
   if (tag === 'select') {

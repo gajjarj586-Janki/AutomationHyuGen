@@ -67,6 +67,6 @@ Feature: Form submission on Find A Dealer
     And click on Search Vehicle button
     Then it will return status code 200 in the API
     And user transits to /find-a-dealer/book-a-service link
-    And message shows Dealer "Showroom opening soon"
+    And the service booking flow is displayed for the resolved dealer
 
     

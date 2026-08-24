@@ -15,6 +15,79 @@
 import { Given, When, Then } from '@cucumber/cucumber';
 import { strict as assert } from 'node:assert';
 
+// ─── Helper: the modal that is actually on screen ─────────────
+// The CPC page mounts four `.modal-wrapper` elements at once — "Email me the
+// quote", "Contact a dealer", "Book a test drive" and "Book a valuation" —
+// and hides the inactive ones with `opacity: 0` (they keep a full bounding
+// box). Filtering by header text and taking `.first()` therefore returns a
+// CLOSED modal whenever more than one matches, and Playwright still reports
+// its fields as visible because `isVisible()` ignores opacity. Resolve the
+// wrapper by opacity instead, and address it by index.
+// Returns the open modal, or null when the page has none (e.g. Contact Us,
+// Talk to an Expert — plain pages whose fields are not in a modal at all).
+async function activeModal(page, world, fallbackHeader = 'Book a valuation', timeout = 10000) {
+  const header = (world && world._activeModalHeader) || fallbackHeader;
+  const find = (h) => Array.from(document.querySelectorAll('.modal-wrapper')).findIndex((el) => {
+    const hd = el.querySelector('.modal-header');
+    return hd && hd.textContent.includes(h) && parseFloat(getComputedStyle(el).opacity) > 0.5;
+  });
+  await page.waitForFunction((h) => {
+    return Array.from(document.querySelectorAll('.modal-wrapper')).some((el) => {
+      const hd = el.querySelector('.modal-header');
+      return hd && hd.textContent.includes(h) && parseFloat(getComputedStyle(el).opacity) > 0.5;
+    });
+  }, header, { timeout }).catch(() => {});
+  const idx = await page.evaluate(find, header).catch(() => -1);
+  return idx < 0 ? null : page.locator('.modal-wrapper').nth(idx);
+}
+
+// Same, but for steps that only make sense with a modal open.
+async function requireActiveModal(page, world, fallbackHeader = 'Book a valuation') {
+  const modal = await activeModal(page, world, fallbackHeader);
+  const header = (world && world._activeModalHeader) || fallbackHeader;
+  assert.ok(modal, `No open "${header}" modal found — every .modal-wrapper on the page is hidden`);
+  return modal;
+}
+
+// Playwright's visibility check ignores `opacity`, and these pages keep closed
+// modals mounted at opacity:0 with a full bounding box — so `.first()` can
+// resolve into a modal the user cannot see. Only accept genuinely visible nodes.
+async function firstVisibleIn(scope, selectors) {
+  const all = scope.locator(selectors);
+  const n = await all.count().catch(() => 0);
+  for (let i = 0; i < n; i++) {
+    const el = all.nth(i);
+    if (!(await el.isVisible().catch(() => false))) continue;
+    const lit = await el.evaluate((node) => {
+      for (let p = node; p && p.nodeType === 1; p = p.parentElement) {
+        if (parseFloat(getComputedStyle(p).opacity || '1') < 0.5) return false;
+      }
+      return true;
+    }).catch(() => false);
+    if (lit) return el;
+  }
+  return null;
+}
+
+// Visible text of whichever panel of the modal is currently shown. The modal
+// keeps every panel mounted, so `textContent()` returns all of them at once —
+// `innerText` respects display and gives just the active step.
+async function visiblePanelText(modal) {
+  return (await modal.innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
+}
+
+// Click a button inside the open modal, failing loudly when it isn't there.
+async function clickInModal(modal, page, selectors, label) {
+  const btn = modal.locator(selectors).first();
+  const present = (await btn.count().catch(() => 0)) > 0 && (await btn.isVisible().catch(() => false));
+  assert.ok(present,
+    `"${label}" button not found on the current modal step. Visible panel: "${(await visiblePanelText(modal)).slice(0, 160)}"`);
+  await btn.scrollIntoViewIfNeeded().catch(() => {});
+  await btn.click();
+  console.log(`✅ Clicked ${label}`);
+  await page.waitForTimeout(1500);
+}
+
 Given('I am a user on the Hyundai Calculator page', async function () {
   await this.page.waitForTimeout(1000);
   const content = await this.page.content();
@@ -355,12 +428,12 @@ Given('user clicks on Contact a dealer', async function () {
 });
 
 When('the user fills postcode from test data', async function () {
-  const _d = this.contactUsData?.[0] || this.genesisRyiData?.[0] || this.ownershipData?.[0] || this.fleetData?.[0]
+  const _d = this.activeTestDataRow
+    || this.contactUsData?.[0] || this.genesisRyiData?.[0] || this.ownershipData?.[0] || this.fleetData?.[0]
     || this.contactDealerData?.[0] || this.testDriveData?.[0] || this.excelRowData || {};
   const _v = (_d['Postcode'] || _d['postcode'] || _d['Post Code'] || _d['Suburb'] || _d['suburb'] || '2000').toString();
-  // Scope to active modal first; if no modal active (e.g. Contact Us page), use page-wide.
-  const _activeHeader = this._activeModalHeader || 'Book a test drive';
-  const _activeModal = this.page.locator('.modal-wrapper').filter({ has: this.page.locator(`.modal-header:has-text("${_activeHeader}")`) }).first();
+  // Scope to the modal that is actually open; if none (e.g. Contact Us page), use page-wide.
+  const _activeModal = (await activeModal(this.page, this, 'Book a test drive', 3000)) || this.page;
   const _selList = [
     'input[name="PostalCode"]',
     'input[name*="postcode" i]',
@@ -375,9 +448,19 @@ When('the user fills postcode from test data', async function () {
   if ((await _f.count()) > 0) {
     await _f.waitFor({ state: 'visible', timeout: 10000 });
     await _f.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
-    await _f.clear().catch(() => {});
-    await _f.fill(_v);
-    console.log(`📋 Filled Postcode: "${_v}"`);
+    // The Book a valuation modal renders Postcode read-only — it inherits the
+    // dealer location set earlier in the scenario. Verify it instead of typing.
+    const _readonly = await _f.evaluate(el => el.readOnly || el.hasAttribute('readonly')).catch(() => false);
+    if (_readonly) {
+      const _actual = (await _f.inputValue().catch(() => '')).trim();
+      assert.equal(_actual, _v,
+        `Postcode is read-only and shows "${_actual}", but test data expects "${_v}"`);
+      console.log(`📋 Postcode is read-only — verified as "${_actual}"`);
+    } else {
+      await _f.clear().catch(() => {});
+      await _f.fill(_v);
+      console.log(`📋 Filled Postcode: "${_v}"`);
+    }
   } else {
     await this.fillField('postcode', _v);
   }
@@ -597,7 +680,8 @@ Given('user clicks on Book a valuation', async function () {
 });
 
 When('the user selects Model from test data', async function () {
-  const _d = this.genesisRyiData?.[0] || this.ownershipData?.[0] || this.fleetData?.[0]
+  const _d = this.activeTestDataRow
+    || this.genesisRyiData?.[0] || this.ownershipData?.[0] || this.fleetData?.[0]
     || this.contactDealerData?.[0] || this.testDriveData?.[0] || this.excelRowData || {};
   const _model = (_d['Model'] || _d['Model Of Interest'] || _d['Model of interest'] || '').toString();
   // Scope to the VISIBLE active modal — multiple wrappers can share the same header text
@@ -702,26 +786,18 @@ When('the user selects Model from test data', async function () {
   await this.page.waitForTimeout(800);
 });
 
+const NEXT_BTN = 'button:has-text("Next"), button:has-text("Continue"), button[class*="next" i]';
+
 When('clicks Next', async function () {
-  const _header = this._activeModalHeader || 'Book a valuation';
-  const modal = this.page.locator('.modal-wrapper').filter({ has: this.page.locator(`.modal-header:has-text("${_header}")`) }).first();
-  const nextBtn = modal.locator([
-    'button:has-text("Next")',
-    'button:has-text("Continue")',
-    'button[class*="next" i]',
-  ].join(', ')).first();
-  if ((await nextBtn.count()) > 0 && (await nextBtn.isVisible().catch(() => false))) {
-    await nextBtn.scrollIntoViewIfNeeded().catch(() => {});
-    await nextBtn.click();
-    console.log('✅ Clicked Next button in modal');
-    await this.page.waitForTimeout(1500);
-  } else {
-    console.log('⚠️  Next button not found in modal — skipping');
-  }
+  const modal = await requireActiveModal(this.page, this);
+  await clickInModal(modal, this.page, NEXT_BTN, 'Next');
 });
 
 When('the user fills Title from test data', async function () {
-  const _d = this.contactUsData?.[0] || this.ownershipData?.[0] || this.genesisRyiData?.[0] || this.contactDealerData?.[0] || this.testDriveData?.[0] || {};
+  // Prefer the sheet this scenario loaded; only then fall back to pre-loaded sheets.
+  const _d = this.activeTestDataRow
+    || this.contactUsData?.[0] || this.ownershipData?.[0] || this.genesisRyiData?.[0]
+    || this.contactDealerData?.[0] || this.testDriveData?.[0] || {};
   // Also scan allConfluenceData for a row that contains a Title-like field
   if (!_d['Title'] && !_d['Salutation'] && this.allConfluenceData) {
     for (const rows of Object.values(this.allConfluenceData)) {
@@ -730,23 +806,28 @@ When('the user fills Title from test data', async function () {
       }
     }
   }
-  const _t = (_d['Title'] || _d['Salutation'] || _d['title'] || 'Mr').toString();
-  const _header = this._activeModalHeader || 'Book a valuation';
-  const modal = this.page.locator('.modal-wrapper').filter({ has: this.page.locator(`.modal-header:has-text("${_header}")`) }).first();
+  // Sheets write titles as "Ms." but the <option> labels are "Ms" — drop the dot.
+  const _t = (_d['Title'] || _d['Salutation'] || _d['title'] || 'Mr').toString().trim().replace(/\.$/, '');
+  // On modal pages stay inside the OPEN modal — a page-wide `.first()` would hit
+  // the Title select of a closed modal. On plain pages (Contact Us, Talk to an
+  // Expert) there is no modal, so search the page but skip hidden subtrees.
+  const modal = await activeModal(this.page, this, 'Book a valuation', 3000);
   const _tSelStr = "select[name*='title' i], select[id*='title' i], select[name*='salut' i], input[name*='salut' i], input[id*='salut' i], input[id*='title' i]";
-  let _tSel = modal.locator(_tSelStr).first();
-  if ((await _tSel.count().catch(() => 0)) === 0 || !(await _tSel.isVisible().catch(() => false))) {
-    _tSel = this.page.locator(_tSelStr).first();
-  }
-  if ((await _tSel.count()) > 0) {
+  const _tSel = (await firstVisibleIn(modal || this.page, _tSelStr)) || this.page.locator(_tSelStr).first();
+  if ((await _tSel.count().catch(() => 0)) > 0 && (await _tSel.isVisible().catch(() => false))) {
     const _tag = await _tSel.evaluate(el => el.tagName.toLowerCase());
     if (_tag === 'select') {
       await _tSel.selectOption({ label: _t }).catch(async () => {
         const _opts = await _tSel.locator('option').allTextContents();
-        const _m = _opts.find(o => o.trim().toLowerCase().includes(_t.toLowerCase())) || _opts[1];
-        if (_m) await _tSel.selectOption({ label: _m.trim() }).catch(() => {});
+        const _m = _opts.find(o => o.trim().toLowerCase() === _t.toLowerCase())
+          || _opts.find(o => o.trim().toLowerCase().includes(_t.toLowerCase()));
+        assert.ok(_m, `Title "${_t}" is not one of the available options: ${_opts.join(', ')}`);
+        await _tSel.selectOption({ label: _m.trim() });
       });
-      console.log(`📋 Entered Title via native select: "${_t}"`);
+      const _got = await _tSel.evaluate(el => el.options[el.selectedIndex]?.text?.trim() || '');
+      assert.ok(_got && _got.toLowerCase() === _t.toLowerCase(),
+        `Title did not take — wanted "${_t}", select shows "${_got}"`);
+      console.log(`📋 Entered Title via native select: "${_got}"`);
       await this.page.waitForTimeout(300);
       return;
     }
@@ -817,84 +898,114 @@ When('the user fills Title from test data', async function () {
 });
 
 When('the user fills What car model are you currently driving from test data', async function () {
-  const _d = this.testDriveData?.[0] || this.contactDealerData?.[0] || {};
-  const _carModel = (_d['Current Car Model'] || _d['Car Model'] || _d['Current Model'] || '').toString();
-  const _header = this._activeModalHeader || 'Book a valuation';
-  const modal = this.page.locator('.modal-wrapper').filter({ has: this.page.locator(`.modal-header:has-text("${_header}")`) }).first();
-  // Could be a text input or a select asking about current vehicle
+  const _d = this.activeTestDataRow || this.testDriveData?.[0] || this.contactDealerData?.[0] || {};
+  const _carModel = (_d['What car model are you currently driving'] || _d['Current Car Model']
+    || _d['Car Model'] || _d['Current Model'] || '').toString();
+  assert.ok(_carModel, 'No "What car model are you currently driving" value found in test data');
+  const modal = await requireActiveModal(this.page, this);
   const _f = modal.locator([
+    'input[name="VehicleCurrentlyDrivenModel__c"]',
+    '#book-valuation-modal-car-model-currently-driving',
+    'input[name*="currentlydriven" i]',
     'input[name*="current" i]',
-    'input[placeholder*="current" i]',
     'input[placeholder*="driving" i]',
-    'select[name*="current" i]',
-    'input[name*="car" i]',
   ].join(', ')).first();
-  if ((await _f.count()) > 0 && (await _f.isVisible().catch(() => false))) {
-    await _f.fill(_carModel || 'N/A');
-    console.log(`📋 Filled current car model: "${_carModel || 'N/A'}"`);
-  } else {
-    console.log('ℹ️  Current car model field not found — skipping');
-  }
+  assert.ok((await _f.count()) > 0 && (await _f.isVisible().catch(() => false)),
+    `"What car model are you currently driving" field not found on the current modal step. ` +
+    `Visible panel: "${(await visiblePanelText(modal)).slice(0, 160)}"`);
+  await _f.fill(_carModel);
+  console.log(`📋 Filled current car model: "${_carModel}"`);
   await this.page.waitForTimeout(300);
 });
 
+// Screen 2 of the Book a valuation modal — "Find a dealer" / Postcode.
 Then('Your Location Screen is displayed', async function () {
-  // Just wait a moment for the location screen to render — no assertion needed
-  await this.page.waitForTimeout(1000);
-  console.log('📋 Your Location Screen step — waiting for render');
+  const modal = await requireActiveModal(this.page, this);
+  const postcode = modal.locator('input[name="PostalCode"], #book-valuation-modal-postcode').first();
+  await postcode.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+  const text = await visiblePanelText(modal);
+  assert.ok(
+    (await postcode.isVisible().catch(() => false)) || /find a dealer|postcode|your location/i.test(text),
+    `Expected the location screen (postcode / "Find a dealer"), but the modal shows: "${text.slice(0, 160)}"`);
+  console.log('✅ Location screen displayed');
+});
+
+// Screen 3 of the Book a valuation modal — "Contact details".
+Then('Contact details screen is displayed', async function () {
+  const modal = await requireActiveModal(this.page, this);
+  const firstName = modal.locator('input[name="FirstName"], #book-valuation-modal-first-name').first();
+  await firstName.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+  const text = await visiblePanelText(modal);
+  assert.ok(
+    (await firstName.isVisible().catch(() => false)) || /contact details/i.test(text),
+    `Expected the Contact details screen, but the modal shows: "${text.slice(0, 160)}"`);
+  console.log('✅ Contact details screen displayed');
 });
 
 Then('user clicks Next', async function () {
-  // Reuse same Next-button logic as 'clicks Next'
-  const _header = this._activeModalHeader || 'Book a valuation';
-  const modal = this.page.locator('.modal-wrapper').filter({ has: this.page.locator(`.modal-header:has-text("${_header}")`) }).first();
-  const nextBtn = modal.locator([
-    'button:has-text("Next")',
-    'button:has-text("Continue")',
-    'button[class*="next" i]',
-  ].join(', ')).first();
-  if ((await nextBtn.count()) > 0 && (await nextBtn.isVisible().catch(() => false))) {
-    await nextBtn.scrollIntoViewIfNeeded().catch(() => {});
-    await nextBtn.click();
-    console.log('✅ Clicked Next (user clicks Next)');
-    await this.page.waitForTimeout(1500);
-  } else {
-    console.log('⚠️  Next button not found — skipping');
-  }
+  const modal = await requireActiveModal(this.page, this);
+  await clickInModal(modal, this.page, NEXT_BTN, 'Next');
 });
 
 Then('the user clicks Confirm booking', async function () {
-  const _header = this._activeModalHeader || 'Book a valuation';
-  const modal = this.page.locator('.modal-wrapper').filter({ has: this.page.locator(`.modal-header:has-text("${_header}")`) }).first();
-  const confirmBtn = modal.locator([
-    'button:has-text("Confirm")',
-    'button:has-text("Submit")',
-    'button[type="submit"]',
-    'button:has-text("Book")',
-  ].join(', ')).first();
-  if ((await confirmBtn.count()) > 0 && (await confirmBtn.isVisible().catch(() => false))) {
-    await confirmBtn.scrollIntoViewIfNeeded().catch(() => {});
-    await confirmBtn.click();
-    console.log('✅ Clicked Confirm booking');
-    await this.page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-    await this.page.waitForTimeout(1500);
-  } else {
-    console.log('⚠️  Confirm booking button not found — skipping');
-  }
+  const modal = await requireActiveModal(this.page, this);
+  // Snapshot the POST count so the assertion step can tell a real submission
+  // apart from a click that was swallowed by client-side validation.
+  this._postCountBeforeSubmit = (this._capturedApiPayloads || []).length;
+  await clickInModal(modal, this.page,
+    'button:has-text("Confirm booking"), button:has-text("Confirm"), button[type="submit"]', 'Confirm booking');
+  await this.page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+  await this.page.waitForTimeout(1500);
 });
 
+// Requests that are analytics/tracking noise rather than a real form submission.
+const _TRACKING = /google|analytics|doubleclick|snapchat|linkedin|twitter|t\.co|insight|marketo|mktoresp|mktoweb|facebook|gtag|pixel|hotjar|clarity|newrelic|sentry|segment|adsrvr|adservice|adsct|webevents/i;
+
 Then('the BAV submission is successful', async function () {
-  await this.page.waitForTimeout(3000);
-  const _header = this._activeModalHeader || 'Book a valuation';
-  const modal = this.page.locator('.modal-wrapper').filter({ has: this.page.locator(`.modal-header:has-text("${_header}")`) }).first();
-  const modalText = await modal.textContent().catch(() => '');
-  const successInModal = /all done|thank|success|submitted|request received|confirm/i.test(modalText);
-  const success = this.page.locator('[class*="thank"], [class*="success"], [class*="all-done"]').first();
-  const visibleOnPage = (await success.count()) > 0 && (await success.isVisible().catch(() => false));
-  const url = this.page.url();
-  console.log(`📋 BAV modal text after submit: "${modalText.trim().slice(0, 200)}"`);
-  assert.ok(successInModal || visibleOnPage || /thank|success|confirm/i.test(url), 'the BAV submission is successful');
-  // Signal success so the generic API status step's fallback passes
+  const modal = await activeModal(this.page, this);
+
+  // Poll for real evidence: a non-tracking form POST, or a success panel that
+  // is actually rendered. Note the modal keeps every panel mounted, so
+  // `textContent()` always contains the words "Confirm booking" — matching on
+  // that is what previously made this step pass unconditionally. Use innerText.
+  const deadline = Date.now() + 20000;
+  let formPost = null;
+  let panelText = '';
+  for (;;) {
+    formPost = (this._capturedApiPayloads || [])
+      .filter(p => (p.method === 'POST' || p.method === 'PUT') && !_TRACKING.test(p.url))
+      .pop() || null;
+    panelText = modal ? await visiblePanelText(modal) : '';
+    const successText = /all done|thank you|thanks|booking (request )?(received|confirmed)|we'?ll be in touch|submitted/i.test(panelText);
+    if (formPost || successText || /thank|success/i.test(this.page.url())) break;
+    if (Date.now() >= deadline) break;
+    await this.page.waitForTimeout(1000);
+  }
+
+  const successText = /all done|thank you|thanks|booking (request )?(received|confirmed)|we'?ll be in touch|submitted/i.test(panelText);
+  const successUrl = /thank|success/i.test(this.page.url());
+
+  if (!formPost && !successText && !successUrl) {
+    // Surface why it failed — usually the form is still on Contact details
+    // with validation errors because a field never got filled.
+    const errors = modal
+      ? await modal.locator('.error:visible, [class*="error"]:visible, [class*="invalid"]:visible')
+          .allInnerTexts().catch(() => [])
+      : [];
+    const seen = (this._capturedApiPayloads || [])
+      .filter(p => p.method === 'POST' || p.method === 'PUT')
+      .map(p => p.url.split('?')[0]).slice(0, 6);
+    assert.fail(
+      'BAV booking was not submitted — no form POST was captured and no confirmation was shown.\n' +
+      `  Modal still shows: "${panelText.slice(0, 200)}"\n` +
+      `  Validation errors: ${errors.filter(Boolean).join(' | ') || 'none visible'}\n` +
+      `  POSTs seen (tracking only): ${seen.join(' | ') || 'none'}`);
+  }
+
+  if (formPost) {
+    console.log(`✅ BAV form POST captured: ${formPost.url.split('?')[0]} → ${formPost.responseStatus || formPost.statusCode}`);
+  } else {
+    console.log(`✅ BAV confirmation shown: "${panelText.slice(0, 120)}"`);
+  }
   this.successMessage = { displayed: true };
-  console.log('✅ BAV submission confirmed');
 });

@@ -830,12 +830,17 @@ When('I select Roof Basket Option Pack {string} from test data', async function 
 // ── Auto-appended steps ──────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FCAI-based ROAP ↔ CPC price verification (new @DriveawayPrice flow).
+// PIM-based ROAP ↔ CPC price verification (@DriveawayPrice flow).
+//
+// A single "Pim" value from the "Driveaway Price - Test Data" sheet keys both
+// sides: it locates the ROAP Offers-table row (Pim column) and the matching CPC
+// carpricecalculator variant (a Pim field in the response). This replaces the
+// old FCAI key, which is being removed from ROAP.
 //
 // Field mapping (live-data verified, user-confirmed):
 //   ROAP MLP        ==  CPC carpricecalculator `price`
 //   ROAP Driveaway  ==  CPC carpricecalculator `priceEstimate`
-// for the CPC variant whose `serviceId` equals the FCAI.
+// for the CPC variant whose Pim value equals the test-data Pim.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const _toNum = (s) => {
@@ -843,49 +848,367 @@ const _toNum = (s) => {
   return Number.isFinite(n) ? n : NaN;
 };
 
-// Recursively find the first object with serviceId === fcai in a parsed JSON blob.
-function _findVariantByServiceId(obj, fcai, depth = 0) {
-  if (!obj || depth > 8) return null;
-  if (Array.isArray(obj)) {
-    for (const it of obj) { const r = _findVariantByServiceId(it, fcai, depth + 1); if (r) return r; }
-    return null;
-  }
-  if (typeof obj === 'object') {
-    const sid = obj.serviceId ?? obj.serviceID ?? obj.variantId;
-    if (sid != null && String(sid) === String(fcai)) return obj;
-    for (const v of Object.values(obj)) { const r = _findVariantByServiceId(v, fcai, depth + 1); if (r) return r; }
-  }
-  return null;
+// ── "Driveaway price is not available" reporting ────────────────────────────
+// Not every model carries a driveaway offer. That is a legitimate data state,
+// not a broken test, so the steps record a plain-English note instead of
+// failing with a selector-level message. world.js writes `scenarioNote` into
+// the scenario metadata JSON, which generateReport.js shows in the report's
+// Summary column.
+function _driveawayModelLabel(world) {
+  const row = (world.driveawayPriceData || [])[0] || {};
+  const model = world.roapModel || row.Vehicle || row.model_slug || '';
+  const pim = world.pim ? `Pim ${world.pim}` : '';
+  const bits = [model, pim].filter(Boolean).join(', ');
+  return bits || 'this model';
 }
 
-// Scan the ROAP Offers table for the row whose FCAI column equals `fcai` and
-// tag it with data-roap-target="1". Scrolls to load lazily-rendered rows.
-async function _tagRoapFcaiRow(page, fcai) {
-  const scan = () => page.evaluate((fcai) => {
+function _setScenarioNote(world, note) {
+  world.scenarioNote = note;
+  world.driveawayNote = note;
+  try { if (typeof world.attach === 'function') world.attach(note, 'text/plain'); } catch { /* ignore */ }
+}
+
+// Extract the identifying + price fields from a parsed `variantpricecalculator`
+// response. That response describes ONE fully-specified vehicle config:
+//   pimId               -> the PIM identifier (matches the test-data Pim)
+//   mlpFromPIM / mlp    -> Manufacturer List Price
+//   finalDriveAwayPrice -> Drive Away price (priceEstimate as fallback)
+// Fields are found by a case-insensitive deep walk so nesting doesn't matter.
+function _extractPimRecord(json) {
+  let pimId = null, mlp = null, driveaway = null, variantId = null, description = null;
+  const visit = (o, depth = 0) => {
+    if (!o || depth > 10 || typeof o !== 'object') return;
+    if (Array.isArray(o)) { for (const x of o) visit(x, depth + 1); return; }
+    for (const [k, v] of Object.entries(o)) {
+      const kl = k.toLowerCase();
+      if (pimId == null && kl === 'pimid' && v != null && v !== '') pimId = String(v).trim();
+      if (kl === 'mlpfrompim' && typeof v === 'number') mlp = v;
+      else if (mlp == null && kl === 'mlp' && typeof v === 'number') mlp = v;
+      if (kl === 'finaldriveawayprice' && typeof v === 'number') driveaway = v;
+      else if (driveaway == null && kl === 'priceestimate' && typeof v === 'number') driveaway = v;
+      if (kl === 'variantid' && v != null) variantId = String(v);
+      if (!description && kl === 'description' && typeof v === 'string') description = v;
+      if (v && typeof v === 'object') visit(v, depth + 1);
+    }
+  };
+  visit(json);
+  return { pimId, mlp, driveaway, variantId, description };
+}
+
+// Read the identifying + price fields an object owns DIRECTLY (no descent).
+const _ownPimRecord = (o) => {
+  let pimId = null, mlp = null, driveaway = null, variantId = null, description = null;
+  for (const [k, v] of Object.entries(o)) {
+    const kl = k.toLowerCase();
+    if (kl === 'pimid' && v != null && v !== '') pimId = String(v).trim();
+    if (kl === 'mlpfrompim' && typeof v === 'number') mlp = v;
+    else if (mlp == null && kl === 'mlp' && typeof v === 'number') mlp = v;
+    if (kl === 'finaldriveawayprice' && typeof v === 'number') driveaway = v;
+    else if (driveaway == null && kl === 'priceestimate' && typeof v === 'number') driveaway = v;
+    if (kl === 'variantid' && v != null) variantId = String(v);
+    if (!description && kl === 'description' && typeof v === 'string') description = v;
+  }
+  return { pimId, mlp, driveaway, variantId, description };
+};
+
+// A variantpricecalculator payload sometimes nests sibling variants alongside
+// the selected one. Harvest every object that carries a pimId AND both of its
+// own prices — a sibling can satisfy the lookup without us ever having to click
+// through to that combination. The "owns its prices" rule is deliberate: a deep
+// walk would happily pair one variant's pimId with another's price.
+function _extractOwnPimRecords(json) {
+  const out = []; const seen = new Set();
+  const visit = (o, depth = 0) => {
+    if (!o || depth > 12 || typeof o !== 'object') return;
+    if (Array.isArray(o)) { for (const x of o) visit(x, depth + 1); return; }
+    const rec = _ownPimRecord(o);
+    if (rec.pimId != null && typeof rec.mlp === 'number' && typeof rec.driveaway === 'number'
+        && !seen.has(rec.pimId)) { seen.add(rec.pimId); out.push(rec); }
+    for (const v of Object.values(o)) if (v && typeof v === 'object') visit(v, depth + 1);
+  };
+  visit(json);
+  return out;
+}
+
+// Depth-first walk of the calculator's option groups (energy type × variant ×
+// powertrain × transmission × option packs), re-reading the LIVE groups after
+// each selection because they are variant-dependent. A `variantpricecalculator`
+// XHR fires on every selection, so after each successful click we call the async
+// `shouldStop()` — the caller checks whether the matching pimId has arrived and
+// aborts the walk as soon as it has. Returns { found, aborted, clicks }.
+// Adapted from the same marker-click traversal used by calculator_pricing.
+async function _cpcSelectAllCombosUntil(page, shouldStop, walkOpts = {}) {
+  const { clickCap = 400, packsFirst = true } = walkOpts;
+  const GROUP_RE_SRC = '^(select energy type|body type|select variant|choose your powertrain|transmission)\\.?$';
+
+  const getGroups = () => page.evaluate(({ reSrc, packsFirst }) => {
+    const groupRe = new RegExp(reSrc, 'i'); const packRe = /option\s+pack/i;
+    const isGH = t => groupRe.test(t) || packRe.test(t);
+    const seen = new Set(); const out = [];
+    for (const el of document.querySelectorAll('h1,h2,h3,h4')) {
+      if (el.offsetParent === null) continue;
+      const t = (el.innerText || '').trim();
+      if (!isGH(t)) continue;
+      const name = t.replace(/\.$/, ''); const key = name.toLowerCase();
+      if (seen.has(key)) continue; seen.add(key); out.push(name);
+    }
+    // Energy type gates the available powertrain/variant pricing, so it must be
+    // chosen FIRST (selecting a variant while the wrong energy type is active,
+    // then toggling energy, resets the variant).
+    //
+    // Option packs GATE the powertrain list: on KONA Electric, "N Line Option
+    // Pack = Yes" leaves only Extended Range 150kW selectable, while "No" offers
+    // Standard Range 99kW as well. Enumerating the powertrain BEFORE the pack
+    // reads that list under whatever pack state leaked in from the previous
+    // branch — which is why the walk returned exactly one powertrain per variant
+    // (KONA/No/Standard, KONA/Yes/Extended) instead of the full 2×2 grid.
+    // Order: energy → variant → option packs → powertrain → transmission.
+    // `packsFirst: false` restores the old ordering for the second pass, in case
+    // a model constrains the pack by the powertrain rather than the other way up.
+    const rank = (name) => {
+      const n = name.toLowerCase();
+      if (/energy type|body type/.test(n)) return 0;
+      if (/select variant/.test(n)) return 1;
+      if (packRe.test(n)) return packsFirst ? 2 : 5;
+      if (/powertrain/.test(n)) return 3;
+      if (/transmission/.test(n)) return 4;
+      return 6;
+    };
+    out.sort((a, b) => rank(a) - rank(b));
+    return out;
+  }, { reSrc: GROUP_RE_SRC, packsFirst });
+
+  const getOptions = (groupName) => page.evaluate(({ groupName, reSrc }) => {
+    const groupRe = new RegExp(reSrc, 'i'); const packRe = /option\s+pack/i;
+    const sectionRe = /^(select energy type|body type|select variant|choose your powertrain|transmission|colour|drive away price|finance|hyundai finance|novated lease|warranty|servicing|accessories|interior|exterior)\.?$/i;
+    const isGH = t => groupRe.test(t) || packRe.test(t);
+    const norm = groupName.trim().toLowerCase().replace(/\.$/, '');
+    const allEls = Array.from(document.querySelectorAll('*'));
+    const heading = Array.from(document.querySelectorAll('h1,h2,h3,h4'))
+      .find(el => el.offsetParent !== null && (el.innerText || '').trim().toLowerCase().replace(/\.$/, '') === norm);
+    if (!heading) return null;
+    const startIdx = allEls.indexOf(heading);
+    const options = []; const seen = new Set();
+    for (let i = startIdx + 1; i < allEls.length; i++) {
+      const el = allEls[i];
+      if (!el || el.offsetParent === null) continue;
+      const t = (el.innerText || '').trim();
+      if (/^H[1-4]$/.test(el.tagName)) {
+        if (sectionRe.test(t) && !groupRe.test(t)) break;
+        if (isGH(t) && t.toLowerCase().replace(/\.$/, '') !== norm) break;
+        continue;
+      }
+      // Tile shape varies a LOT between models: an EV variant/powertrain tile
+      // carries a price line, a range/kW spec and sometimes a badge, so it is
+      // taller and more deeply nested than a petrol one. Keep these bounds
+      // loose — a junk label costs one cheap no-op click, but a dropped label
+      // silently deletes a whole combination branch from the sweep (this is
+      // what hid the KONA Electric powertrain options).
+      if (el.children.length > 6) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 80 || r.height < 24 || r.height > 220) continue;
+      if (!t || t.length > 200) continue;
+      const label = t.split(/\n+/).map(s => s.trim()).filter(Boolean)[0];
+      if (!label || label.length > 80) continue;
+      if (/\$/.test(label)) continue; // a price line is not an option label
+      if (/^(find what|select|change vehicle|choose|what's detailed|whats detailed)/i.test(label)) continue;
+      if (seen.has(label)) continue;
+      seen.add(label); options.push(label.slice(0, 100));
+      if (options.length >= 24) break;
+    }
+    return options;
+  }, { groupName, reSrc: GROUP_RE_SRC });
+
+  const markOption = (groupName, label) => page.evaluate(({ groupName, label }) => {
+    document.querySelectorAll('[data-pw-target]').forEach(el => el.removeAttribute('data-pw-target'));
+    const normGroup = groupName.trim().toLowerCase().replace(/\.$/, '');
+    const normLabel = label.trim().toLowerCase();
+    const headings = Array.from(document.querySelectorAll('h1,h2,h3,h4')).filter(el => el.offsetParent !== null);
+    const heading = headings.find(el => (el.innerText || '').trim().toLowerCase().replace(/\.$/, '') === normGroup);
+    if (!heading) return { ok: false };
+    const hIdx = headings.indexOf(heading);
+    const nextHeading = headings[hIdx + 1] || null;
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+    const candidates = []; let inRange = false;
+    while (walker.nextNode()) {
+      const el = walker.currentNode;
+      if (el === heading) { inRange = true; continue; }
+      if (nextHeading && el === nextHeading) break;
+      if (!inRange || el.offsetParent === null) continue;
+      // Must stay >= the limit getOptions uses, or a tile can be enumerated as
+      // an option and then be unclickable. EV powertrain tiles carry a title, a
+      // subtitle and a "+ Driveaway Offer" badge, which puts them over 4.
+      if (el.children.length > 6) continue;
+      const t = (el.innerText || '').trim(); if (!t) continue;
+      const firstLine = t.split(/\n+/).map(s => s.trim()).filter(Boolean)[0] || '';
+      if (firstLine.toLowerCase() !== normLabel) continue;
+      if (/^H[1-4]$/.test(el.tagName)) continue;
+      candidates.push(el);
+    }
+    if (!candidates.length) return { ok: false };
+    const isClickable = (el) => {
+      if (!el || el === document.body) return false;
+      if (el.tagName === 'BUTTON' || el.tagName === 'A') return true;
+      const role = el.getAttribute && el.getAttribute('role');
+      if (['button', 'tab', 'radio', 'option'].includes(role)) return true;
+      if (el.hasAttribute && el.hasAttribute('tabindex')) return true;
+      const clsStr = (el.className || '').toString();
+      const cls = clsStr.split(/\s+/);
+      if (cls.includes('cpc-option')) return true;
+      if (cls.some(t => /^(option-tile|tile|btn|button|card|chip)$/i.test(t))) return true;
+      if (/cursor-pointer/.test(clsStr)) return true;
+      return false;
+    };
+    const findClickable = (start) => { let el = start; for (let i = 0; i < 6 && el && el !== document.body; i++) { if (isClickable(el)) return el; el = el.parentElement; } return start; };
+    const isSelected = (el) => {
+      if (!el) return false;
+      const g = a => el.getAttribute && el.getAttribute(a) === 'true';
+      if (g('aria-selected') || g('aria-checked') || g('aria-pressed')) return true;
+      return /\b(selected|active|is-selected|is-active|checked)\b/i.test((el.className || '').toString());
+    };
+    const resolved = [];
+    for (const c of candidates) { const cl = findClickable(c); if (isClickable(cl) && !resolved.includes(cl)) resolved.push(cl); }
+    const pool = resolved.length ? resolved : [findClickable(candidates[0])];
+    let target = pool.find(el => !isSelected(el)); const alreadySelected = !target;
+    if (!target) target = pool[0];
+    target.setAttribute('data-pw-target', '1');
+    return { ok: true, alreadySelected };
+  }, { groupName, label });
+
+  // Returns 'clicked' | 'already' | false (both strings are truthy).
+  // Re-clicking an option that is ALREADY active fires no variantpricecalculator
+  // XHR, so waiting the full 10s on it is dead time — and single-option groups
+  // (powertrain/transmission on most models) are always in that state. On KONA
+  // that alone was ~4 minutes of the walk, which is why the deep combination
+  // pass never got through the Electric branch before the run was torn down.
+  const clickOption = async (groupName, label) => {
+    const found = await markOption(groupName, label);
+    if (!found || !found.ok) return false;
+    const already = !!found.alreadySelected;
+    const target = page.locator('[data-pw-target="1"]');
+    try {
+      await target.scrollIntoViewIfNeeded({ timeout: 4000 });
+      await target.click({ timeout: 5000 });
+    } catch {
+      try {
+        await page.evaluate(() => document.querySelector('[data-pw-target="1"]')?.scrollIntoView({ block: 'center', inline: 'center' })).catch(() => {});
+        await page.waitForTimeout(200);
+        await target.click({ timeout: 5000, force: true });
+      } catch {
+        await page.evaluate(() => document.querySelector('[data-pw-target="1"]')?.removeAttribute('data-pw-target')).catch(() => {});
+        return false;
+      }
+    }
+    await page.evaluate(() => document.querySelector('[data-pw-target="1"]')?.removeAttribute('data-pw-target')).catch(() => {});
+    // The trusted click triggers a variantpricecalculator XHR — wait for it so
+    // the caller's shouldStop() sees the freshly-captured pimId.
+    await page.waitForResponse(r => /variantpricecalc/i.test(r.url()) && r.ok(), { timeout: already ? 1500 : 10000 }).catch(() => null);
+    await page.waitForTimeout(already ? 150 : 400);
+    return already ? 'already' : 'clicked';
+  };
+
+  // `stop` = the caller's shouldStop() fired (target found). `aborted` = the walk
+  // ended early for any other reason (page closed, click cap). Keeping these
+  // apart matters: the old code set one flag for both, so a browser that died
+  // mid-walk was reported as "after selecting all combinations" when in fact
+  // most combinations were never tried.
+  let stop = false, aborted = false, clicks = 0;
+  const MAX_DEPTH = 8;
+  const isFatal = (e) => /Target page, context or browser has been closed|Execution context was destroyed/i.test((e && e.message) || '');
+
+  // Wait for the calculator's selectable option UI to render — right after the
+  // dealer is set the page can still be hydrating, and enumerating too early
+  // returns empty group/variant lists (so only the default variant is seen).
+  for (let i = 0; i < 40; i++) {
+    const groups = await getGroups().catch(() => []);
+    const vg = groups.find(g => /select variant/i.test(g));
+    if (vg) {
+      const o = await getOptions(vg).catch(() => null);
+      if (o && o.length) break;
+    }
+    await page.waitForTimeout(500);
+  }
+
+  // ONE depth-first walk over the FULL cartesian product of the live option
+  // groups — energy/body → variant → powertrain → transmission → option packs.
+  // Options are re-read at every level because each group's contents depend on
+  // the selections above it (KONA exposes one powertrain under Petrol/Hybrid but
+  // two — Standard Range / Extended Range — under Electric), so a model's real
+  // combination set can only be discovered as the walk descends.
+  //
+  // There used to be a "fast pass" over energy × variant ahead of this walk. It
+  // covered every combination only for models whose powertrain and transmission
+  // groups have a single option each, and left the deep walk to redo everything
+  // from scratch. shouldStop() is checked after every single selection here, so
+  // the walk reaches the common case just as quickly without the duplication.
+  const dfs = async (handled, path) => {
+    if (stop || clicks >= clickCap) return;
+    let groups = [];
+    try { groups = await getGroups(); } catch (e) { if (isFatal(e)) { stop = true; aborted = true; } return; }
+    const nextGroup = groups.find(g => !handled.has(g.toLowerCase()));
+    if (!nextGroup || handled.size >= MAX_DEPTH) { if (await shouldStop()) stop = true; return; }
+    const nextHandled = new Set(handled); nextHandled.add(nextGroup.toLowerCase());
+    let opts = null;
+    try { opts = await getOptions(nextGroup); } catch (e) { if (isFatal(e)) { stop = true; aborted = true; return; } }
+    if (!opts || !opts.length) return dfs(nextHandled, path);
+    console.log(`   ${'  '.repeat(handled.size)}${nextGroup}: ${opts.join(' | ')}${path ? `   [under ${path}]` : ''}`);
+    let selectedAny = false;
+    for (const opt of opts) {
+      if (stop || clicks >= clickCap) break;
+      let ok = false;
+      try { ok = await clickOption(nextGroup, opt); clicks++; } catch (e) { if (isFatal(e)) { stop = true; aborted = true; break; } }
+      if (!ok) { console.log(`   ${'  '.repeat(handled.size)}⚠️  could not select "${opt}" in ${nextGroup}`); continue; }
+      selectedAny = true;
+      if (await shouldStop()) { stop = true; break; }
+      await dfs(nextHandled, path ? `${path} › ${opt}` : opt);
+    }
+    // Nothing in this group was selectable (labels moved, tiles disabled) —
+    // don't let it block the groups below it; carry on in the current state.
+    if (!selectedAny && !stop) await dfs(nextHandled, path);
+  };
+  await dfs(new Set(), '');
+  if (clicks >= clickCap) {
+    aborted = true;
+    console.warn(`⚠️  Combination walk hit the ${clickCap}-click cap — the sweep is INCOMPLETE.`);
+  }
+  return { found: stop && !aborted, aborted, clicks };
+}
+
+// Scan the ROAP Offers table for the row whose Pim column equals `pim` and tag
+// it with data-roap-target="1". Columns are resolved by header text (Pim / MLP /
+// Model / Variant Group) so they survive column reorders (e.g. FCAI removal).
+// Scrolls to load lazily-rendered rows.
+async function _tagRoapPimRow(page, pim) {
+  const scan = () => page.evaluate((pim) => {
     const norm = s => (s || '').replace(/\s+/g, ' ').trim();
     document.querySelectorAll('[data-roap-target]').forEach(e => e.removeAttribute('data-roap-target'));
     for (const t of Array.from(document.querySelectorAll('table'))) {
       const rows = Array.from(t.querySelectorAll('tr'));
-      const header = rows.find(r => /\bFCAI\b/.test(r.innerText) && /\bMLP\b/.test(r.innerText));
+      const header = rows.find(r => /\bPIM\b/i.test(r.innerText) && /\bMLP\b/i.test(r.innerText));
       if (!header) continue;
       const heads = Array.from(header.querySelectorAll('th,td')).map(c => norm(c.innerText));
-      const fcaiIdx = heads.findIndex(h => /^fcai$/i.test(h));
+      const pimIdx = heads.findIndex(h => /^pim$/i.test(h));
       const mlpIdx = heads.findIndex(h => /^mlp$/i.test(h));
-      if (fcaiIdx === -1) continue;
+      const modelIdx = heads.findIndex(h => /^model/i.test(h));
+      const vgIdx = heads.findIndex(h => /variant\s*group/i.test(h));
+      if (pimIdx === -1) continue;
+      const mi = modelIdx >= 0 ? modelIdx : 1;
+      const vi = vgIdx >= 0 ? vgIdx : 4;
       for (const r of rows) {
         if (r === header) continue;
         const cells = r.querySelectorAll('td,th');
-        if (!cells.length || fcaiIdx >= cells.length) continue;
-        if (norm(cells[fcaiIdx].textContent) === String(fcai)) {
+        if (!cells.length || pimIdx >= cells.length) continue;
+        if (norm(cells[pimIdx].textContent) === String(pim)) {
           r.setAttribute('data-roap-target', '1');
-          return { ok: true, model: norm(cells[1] && cells[1].textContent),
-                   variantGroup: norm(cells[4] && cells[4].textContent),
+          return { ok: true,
+                   model: norm(cells[mi] && cells[mi].textContent),
+                   variantGroup: norm(cells[vi] && cells[vi].textContent),
                    mlp: norm(cells[mlpIdx] && cells[mlpIdx].textContent), mlpIdx };
         }
       }
     }
     return { ok: false };
-  }, fcai);
+  }, pim);
   let res = await scan();
   for (let i = 0; i < 15 && !res.ok; i++) {
     await page.mouse.wheel(0, 4000);
@@ -899,16 +1222,34 @@ Given('I load the Driveaway Price test data', async function () {
   _ensureDriveawayData(this);
   const row = (this.driveawayPriceData || [])[0] || {};
   assert.ok(Object.keys(row).length, 'No "Driveaway Price - Test Data" row found in Confluence.');
-  console.log(`📋 Driveaway test data: FCAI=${row.FCAI}, postcode=${row.postcode}, CPC=${row['CPC URL']}`);
+  console.log(`📋 Driveaway test data: Pim=${row.Pim ?? row.PIM ?? row.pim}, postcode=${row.postcode}, CPC=${row['CPC URL']}`);
 });
+
+// Resolve an environment-specific page URL from world.pageUrls, which world.js
+// populates from the Confluence "Environment Configuration" URL table keyed by
+// the `Page` column (lower-cased). So a `Page = ROAP` row's URL for the active
+// environment is available here as pageUrls['roap']. Tries each key in order.
+function _envPageUrl(world, ...keys) {
+  const pageUrls = world.pageUrls || {};
+  for (const k of keys) {
+    const v = (pageUrls[k] ?? pageUrls[String(k).toLowerCase()] ?? '').toString().trim();
+    if (/^https?:\/\//i.test(v)) return v.replace(/\/+$/, '');
+  }
+  return '';
+}
 
 Given('I open the ROAP URL from test data', async function () {
   _ensureDriveawayData(this);
   const row = (this.driveawayPriceData || [])[0] || {};
-  const target = (row.roap_url || row['ROAP URL'] || row.ROAP_URL || '').toString().trim();
-  assert.ok(/^https?:\/\//i.test(target), `ROAP URL is not a valid http(s) URL: "${target}".`);
+  // Prefer the active-environment ROAP URL (Page=ROAP row in the Confluence
+  // Environment Configuration), falling back to a roap_url column on the
+  // Driveaway Price sheet if the environment table has no ROAP entry.
+  const target = _envPageUrl(this, 'roap', 'ROAP')
+    || (row.roap_url || row['ROAP URL'] || row.ROAP_URL || '').toString().trim();
+  assert.ok(/^https?:\/\//i.test(target),
+    `ROAP URL is not a valid http(s) URL: "${target}". Add a "Page = ROAP" row to the Environment Configuration table (or a roap_url column to "Driveaway Price - Test Data").`);
   _setupNetworkIntercept(this);
-  console.log(`📋 Opening ROAP: ${target}`);
+  console.log(`📋 Opening ROAP [env: ${this.environmentName || 'unknown'}]: ${target}`);
   await this.page.goto(target, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await this.page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
   await this.page.waitForTimeout(1500);
@@ -929,31 +1270,38 @@ When('I login using the username and password from test data', async function ()
   console.log(`📋 ROAP login ${ok ? 'succeeded — Offers page visible' : 'submitted (Offers not confirmed)'}`);
 });
 
-When('I retrieve the FCAI from test data', async function () {
+// Accepts both the new "Pim" wording and the legacy "FCAI" wording so the step
+// keeps matching whether the Confluence feature file has been updated yet.
+When(/^I retrieve the (?:Pim(?: value)?|FCAI) from test data$/i, async function () {
   _ensureDriveawayData(this);
   const row = (this.driveawayPriceData || [])[0] || {};
-  this.fcai = (row.FCAI || row.fcai || '').toString().trim();
-  assert.ok(this.fcai, 'No FCAI value in "Driveaway Price - Test Data".');
-  console.log(`📋 FCAI = ${this.fcai}`);
+  // Prefer the new Pim column; fall back to FCAI during the transition.
+  this.pim = (row.Pim ?? row.PIM ?? row.pim ?? row.FCAI ?? row.fcai ?? '').toString().trim();
+  assert.ok(this.pim, 'No Pim value in "Driveaway Price - Test Data".');
+  console.log(`📋 Pim = ${this.pim}`);
 });
 
-When('I search the vehicle using FCAI', async function () {
-  assert.ok(this.fcai, 'FCAI not set — the retrieve step must run first.');
+When(/^I search the vehicle using (?:Pim(?: value)?|FCAI)$/i, async function () {
+  assert.ok(this.pim, 'Pim not set — the retrieve step must run first.');
   await this.page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-  const found = await _tagRoapFcaiRow(this.page, this.fcai);
-  assert.ok(found.ok, `Could not find a row with FCAI=${this.fcai} in the ROAP Offers table.`);
+  const found = await _tagRoapPimRow(this.page, this.pim);
+  assert.ok(found.ok, `Could not find a row with Pim=${this.pim} in the ROAP Offers table.`);
   this.roapModel = found.model;
-  console.log(`🔎 Found ROAP row: ${found.model} / ${found.variantGroup} (FCAI ${this.fcai}, MLP ${found.mlp})`);
+  this.roapMlpIdx = found.mlpIdx;
+  console.log(`🔎 Found ROAP row: ${found.model} / ${found.variantGroup} (Pim ${this.pim}, MLP ${found.mlp})`);
 });
 
 When('I capture the MLP from ROAP', async function () {
   const row = this.page.locator('[data-roap-target="1"]').first();
-  assert.ok(await row.count(), 'FCAI row not tagged — the search step must run first.');
-  const mlpText = await this.page.evaluate(() => {
+  assert.ok(await row.count(), 'Pim row not tagged — the search step must run first.');
+  // Use the MLP column index resolved from the header during the search step
+  // (falls back to 9) so it stays correct if the FCAI column is removed.
+  const mlpIdx = Number.isInteger(this.roapMlpIdx) && this.roapMlpIdx >= 0 ? this.roapMlpIdx : 9;
+  const mlpText = await this.page.evaluate((idx) => {
     const r = document.querySelector('[data-roap-target="1"]');
     const cells = r ? r.querySelectorAll('td,th') : [];
-    return cells[9] ? cells[9].textContent.replace(/\s+/g, ' ').trim() : '';
-  });
+    return cells[idx] ? cells[idx].textContent.replace(/\s+/g, ' ').trim() : '';
+  }, mlpIdx);
   const mlp = _toNum(mlpText);
   assert.ok(Number.isFinite(mlp) && mlp > 0, `Could not read a numeric MLP (got "${mlpText}").`);
   this.roapMlp = mlp;
@@ -962,15 +1310,22 @@ When('I capture the MLP from ROAP', async function () {
 });
 
 When('I capture the Driveaway Price from ROAP', async function () {
-  // Expand the FCAI row's package sub-row via its checkbox (id="selected--<FCAI>").
-  const cb = this.page.locator(`#selected--${this.fcai}`).first();
-  if (await cb.count()) {
-    if (!(await cb.isChecked().catch(() => false))) await cb.click({ force: true }).catch(() => {});
+  // Expand the tagged row's package sub-row. Prefer a checkbox inside the row;
+  // fall back to a #selected--<pim> checkbox, then to clicking the row itself.
+  const targetRow = this.page.locator('[data-roap-target="1"]').first();
+  const rowCb = targetRow.locator('input[type="checkbox"]').first();
+  if (await rowCb.count()) {
+    if (!(await rowCb.isChecked().catch(() => false))) await rowCb.click({ force: true }).catch(() => {});
   } else {
-    await this.page.locator('[data-roap-target="1"]').first().click().catch(() => {});
+    const cb = this.page.locator(`#selected--${this.pim}`).first();
+    if (await cb.count()) {
+      if (!(await cb.isChecked().catch(() => false))) await cb.click({ force: true }).catch(() => {});
+    } else {
+      await targetRow.click().catch(() => {});
+    }
   }
   await this.page.waitForTimeout(1500);
-  // Scope the search to the sibling rows immediately after the tagged FCAI row
+  // Scope the search to the sibling rows immediately after the tagged Pim row
   // (the expanded Driveaway sub-row) so we don't read another vehicle's offer.
   const info = await this.page.evaluate(() => {
     const norm = s => (s || '').replace(/\s+/g, ' ').trim();
@@ -986,25 +1341,36 @@ When('I capture the Driveaway Price from ROAP', async function () {
       el = el.nextElementSibling; steps++;
     }
     return { found };
-  }, this.fcai);
-  assert.ok(!info.err && info.found && info.found.length,
-    `No "Driveaway $..." sub-row found after expanding the FCAI ${this.fcai} row.`);
-  console.log(`📋 Driveaway sub-row candidates: ${JSON.stringify(info.found)}`);
-  const da = _toNum(info.found[0].amount);
-  assert.ok(Number.isFinite(da) && da > 0, `Could not parse driveaway amount from "${info.found[0].text}".`);
-  this.roapDriveaway = da;
-  this.roapDriveawayText = `$${info.found[0].amount}`;
-  console.log(`📌 ROAP Driveaway = $${info.found[0].amount} (${da})`);
-  // Save ONE ROAP evidence screenshot showing the FCAI row + expanded driveaway.
-  // Named with the FCAI so the report's auxiliary-screenshot scan (which dedupes
-  // by the name key) only ever surfaces this single "FCAI<n>" image.
-  // Scroll the FCAI row into view and capture the VIEWPORT (not fullPage) so the
-  // shot actually shows the FCAI row — a full-page shot of the 291-row table
-  // would only show the top of the list, not the FCAI vehicle.
+  });
+  // A missing tagged row IS a real failure — the search step never ran or the
+  // Pim row vanished — so keep asserting on that.
+  assert.ok(!info.err, `Pim row not tagged (${info.err}) — the "search the vehicle using Pim value" step must run first.`);
+  const found = info.found || [];
+  console.log(`📋 Driveaway sub-row candidates: ${JSON.stringify(found)}`);
+  const da = found.length ? _toNum(found[0].amount) : NaN;
+  if (!found.length || !(Number.isFinite(da) && da > 0)) {
+    // No driveaway offer configured against this Pim. Record it and carry on so
+    // the MLP comparison still runs; the driveaway check reports the note.
+    this.roapDriveaway = null;
+    this.roapDriveawayText = 'Not available';
+    this.roapDriveawayUnavailable = true;
+    const why = found.length ? ` (unreadable amount in "${found[0].text}")` : '';
+    console.log(`⚠️  Driveaway price is not available for this model (${_driveawayModelLabel(this)}) in ROAP${why}`);
+  } else {
+    this.roapDriveaway = da;
+    this.roapDriveawayText = `$${found[0].amount}`;
+    console.log(`📌 ROAP Driveaway = $${found[0].amount} (${da})`);
+  }
+  // Save ONE ROAP evidence screenshot showing the Pim row + expanded driveaway.
+  // Named with the Pim value so the report's auxiliary-screenshot scan (which
+  // dedupes by the name key) only ever surfaces this single "Pim<n>" image.
+  // Scroll the Pim row into view and capture the VIEWPORT (not fullPage) so the
+  // shot actually shows the Pim row — a full-page shot of the 291-row table
+  // would only show the top of the list, not the Pim vehicle.
   try {
     const dir = 'screenshots'; if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
-    const file = path.join(dir, `roap-Driveaway-FCAI${this.fcai}-${ts}.png`);
+    const file = path.join(dir, `roap-Driveaway-Pim${this.pim}-${ts}.png`);
     const targetRow = this.page.locator('[data-roap-target="1"]').first();
     await targetRow.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     // Nudge up a little so the row sits below the sticky header, with its
@@ -1018,85 +1384,360 @@ When('I capture the Driveaway Price from ROAP', async function () {
   } catch { /* ignore */ }
 });
 
+// Resolve the calculator (CPC) base URL for the ACTIVE environment. world.js
+// populates `this.pageUrls` from the Confluence "Environment Configuration"
+// table (Status=Yes) / activeEnvironment.json cache, so the same scenario runs
+// against Stage / Prod / Dev with no code change — the same mechanism the
+// calculator_pricing feature uses. Falls back to the hyundai site root, then
+// to production.
+function _calculatorBaseUrl(world) {
+  const direct = _envPageUrl(world, 'calculator', 'Calculator');
+  if (direct) return direct;
+  const pageUrls = world.pageUrls || {};
+  for (const u of Object.values(pageUrls)) {
+    try {
+      const url = new URL(u);
+      if (/hyundai/i.test(url.hostname)) return `${url.protocol}//${url.host}/au/en/shop/calculator`;
+    } catch { /* ignore */ }
+  }
+  return 'https://www.hyundai.com/au/en/shop/calculator';
+}
+
+// Turn a ROAP model name into the calculator URL slug:
+//   "VENUE"         -> "venue"
+//   "SANTA FE"      -> "santa-fe"
+//   "KONA Electric" -> "kona-electric"
+// Drops "(QX)"-style qualifiers and collapses any punctuation to single hyphens.
+function _modelSlug(name) {
+  return String(name || '')
+    .replace(/\(.*?\)/g, ' ')        // drop parenthetical qualifiers
+    .replace(/[^a-zA-Z0-9]+/g, ' ')  // punctuation -> space
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-');           // spaces -> hyphens
+}
+
+// Slugs to try, longest first: "KONA Electric" -> ["kona-electric", "kona"].
+// ROAP's Model column is usually already the calculator model ("KONA (SX2)" ->
+// "kona"), but a test-data Site_Model / model_slug column often carries the
+// VARIANT GROUP instead ("KONA Electric") — and on the calculator that is an
+// energy type inside /calculator/kona, not a model of its own. Trimming trailing
+// words recovers the real model page.
+function _slugCandidates(name) {
+  const base = _modelSlug(name);
+  if (!base) return [];
+  const parts = base.split('-');
+  const out = [];
+  for (let n = parts.length; n >= 1; n--) out.push(parts.slice(0, n).join('-'));
+  return out;
+}
+
+// Did we land on a MODEL calculator page, or on the model-picker landing page?
+// The calculator is a SPA: /au/en/shop/calculator/<anything> returns HTTP 200
+// and resolves the model client-side, so an HTTP status probe cannot tell the
+// two apart (verified on dev: /calculator/kona-electric -> 200, renders the
+// picker). The only trustworthy signal is rendered UI — the option-group
+// headings, or the "Change vehicle" control. Mirrors CPC-pageLoad.steps.js, and
+// deliberately does NOT key on "Coming soon", which is a site-wide promo block.
+async function _cpcModelPageLoaded(page, timeoutMs = 25000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const ok = await page.evaluate(() => {
+      const headings = Array.from(document.querySelectorAll('h1,h2,h3,h4'))
+        .filter(el => el.offsetParent !== null)
+        .map(el => (el.innerText || '').trim());
+      if (headings.some(t => /^(select energy type|body type|select variant|choose your powertrain|transmission)\.?$/i.test(t))) return true;
+      return /change vehicle/i.test(document.body.innerText || '');
+    }).catch(() => false);
+    if (ok) return true;
+    await page.waitForTimeout(500);
+  }
+  return false;
+}
+
 When('I open the CPC URL from test data', async function () {
   _ensureDriveawayData(this);
   const row = (this.driveawayPriceData || [])[0] || {};
-  const target = (row['CPC URL'] || row.CPCURL || row.cpc_url || row.cpcUrl || '').toString().trim();
-  assert.ok(/^https?:\/\//i.test(target), `CPC URL is not a valid http(s) URL: "${target}".`);
-  // Capture the carpricecalculator API (its variants carry serviceId → price/priceEstimate).
-  this._cpcCarPriceCalc = null;
-  if (!this._cpcCarPriceListener) {
+
+  // Build the calculator URL at run time from the active environment's
+  // calculator base + the model captured from ROAP (set by the
+  // "I search the vehicle using Pim value" step). An explicit slug column in the
+  // sheet, if present, overrides the auto-derived slug.
+  const base = _calculatorBaseUrl(this);
+  const explicitSlug = (row.Site_Model || row.site_model || row.model_slug
+    || row.calculator_slug || row.Slug || row.slug || '').toString().trim();
+
+  // Try the test-data slug first, then the model captured from ROAP, each
+  // trimmed word-by-word, then any explicit 'CPC URL' column as a last resort.
+  const slugs = [];
+  for (const s of [..._slugCandidates(explicitSlug), ..._slugCandidates(this.roapModel)]) {
+    if (s && !slugs.includes(s)) slugs.push(s);
+  }
+  assert.ok(slugs.length,
+    `Could not derive a calculator model slug (ROAP model = "${this.roapModel || ''}"). ` +
+    `Ensure the Pim search step ran, or add a model_slug column to "Driveaway Price - Test Data".`);
+
+  const fallbackUrl = (row['CPC URL'] || row.CPCURL || row.cpc_url || row.cpcUrl || '').toString().trim();
+  const attempts = slugs.map(s => `${base}/${s}`);
+  if (/^https?:\/\//i.test(fallbackUrl) && !attempts.includes(fallbackUrl)) attempts.push(fallbackUrl);
+
+  // Capture every variantpricecalculator response. It fires per variant/option
+  // selection and carries pimId + mlp/mlpFromPIM + finalDriveAwayPrice, so we
+  // index the parsed records by pimId to match the test-data Pim later.
+  this._cpcByPim = {};
+  this._cpcRawByPim = {};
+  this._cpcVpcUrlByPim = {};
+  this._cpcLatest = null;
+  if (!this._cpcVpcListener) {
     this.page.on('response', async (resp) => {
       try {
-        if (!/carpricecalculator/i.test(resp.url()) || !resp.ok()) return;
+        if (!/variantpricecalc/i.test(resp.url()) || !resp.ok()) return;
         const body = await resp.text().catch(() => '');
         const json = body ? JSON.parse(body) : null;
-        if (json) { this._cpcCarPriceCalc = json; this._cpcCarPriceCalcUrl = resp.url(); }
+        if (!json) return;
+        const rec = _extractPimRecord(json);
+        this._cpcLatest = rec;
+        // Sibling variants first, then the selected one — so the authoritative
+        // record wins if the payload describes the same pimId twice.
+        for (const sib of _extractOwnPimRecords(json)) {
+          if (this._cpcByPim[sib.pimId]) continue;
+          this._cpcByPim[sib.pimId] = sib;
+          this._cpcRawByPim[sib.pimId] = body;
+          this._cpcVpcUrlByPim[sib.pimId] = resp.url();
+        }
+        if (rec.pimId != null) {
+          this._cpcByPim[rec.pimId] = rec;
+          this._cpcRawByPim[rec.pimId] = body;
+          this._cpcVpcUrlByPim[rec.pimId] = resp.url();
+        }
       } catch { /* ignore */ }
     });
-    this._cpcCarPriceListener = true;
+    this._cpcVpcListener = true;
   }
-  console.log(`📋 Opening CPC: ${target}`);
-  await this.page.goto(target, { waitUntil: 'domcontentloaded', timeout: 60000 });
+
+  // Record the suburb/postcode lookup the location modal calls. When it comes
+  // back empty the modal can't set a dealer, and the calculator bounces to its
+  // landing page — knowing the count turns that into a one-line diagnosis
+  // instead of a mystery "wrong page" failure.
+  if (!this._cpcLocationListener) {
+    this.page.on('response', async (resp) => {
+      try {
+        if (!/\/common\/v\d+\/location\?/i.test(resp.url())) return;
+        const body = await resp.text().catch(() => '');
+        let count = null;
+        try { const j = JSON.parse(body); if (Array.isArray(j)) count = j.length; } catch { /* ignore */ }
+        this._lastLocationApi = { url: resp.url(), status: resp.status(), count };
+      } catch { /* ignore */ }
+    });
+    this._cpcLocationListener = true;
+  }
+
+  console.log(`📋 Environment calculator base: ${base}`);
+  console.log(`📋 ROAP model "${this.roapModel || ''}"${explicitSlug ? ` / test-data slug "${explicitSlug}"` : ''} → candidates: ${slugs.join(', ')}`);
+
+  // The calculator renders NOTHING until a dealer is set — verified on prod:
+  // /calculator/kona shows no option groups at all before the location modal is
+  // answered. So the "is this really a model page?" check can't happen here; the
+  // dealer step below walks these candidates and validates each after setting the
+  // dealer. Just open the first one.
+  this._cpcAttempts = attempts;
+  console.log(`📋 Opening CPC: ${attempts[0]}`);
+  await this.page.goto(attempts[0], { waitUntil: 'domcontentloaded', timeout: 60000 });
 });
 
-When('I set the dealer using the postcode and suburb from test data', async function () {
+// 6 min: this step may answer the location modal and wait for the calculator to
+// render once per candidate URL before one of them proves out.
+When('I set the dealer using the postcode and suburb from test data', { timeout: 6 * 60 * 1000 }, async function () {
   _ensureDriveawayData(this);
   const row = (this.driveawayPriceData || [])[0] || {};
   const postcode = (row.postcode || row.Postcode || '2000').toString().trim();
-  console.log(`📍 Setting dealer via postcode ${postcode}`);
-  await handleLocationModal(this.page, postcode);
-  // Wait for the carpricecalculator API to return (fires once the dealer is set).
-  for (let i = 0; i < 30 && !this._cpcCarPriceCalc; i++) await this.page.waitForTimeout(500);
-  assert.ok(this._cpcCarPriceCalc,
-    'CPC carpricecalculator API response was not captured after setting the dealer.');
-  console.log(`📋 Captured CPC pricing API: ${this._cpcCarPriceCalcUrl}`);
+
+  // Setting the dealer is also what proves we're on a real model page: the
+  // calculator only renders its option groups once a dealer exists. So each
+  // candidate URL from the previous step is answered here and then checked —
+  // /calculator/kona-electric returns HTTP 200 and keeps its URL but never
+  // renders a calculator, which is exactly how a bad slug used to slip through
+  // and leave the run sitting on the model-picker page.
+  const attempts = (this._cpcAttempts && this._cpcAttempts.length)
+    ? this._cpcAttempts : [this.page.url()];
+  let target = null;
+  const rejected = [];
+  for (const url of attempts) {
+    if (this.page.url() !== url) {
+      console.log(`📋 Opening CPC: ${url}`);
+      const navOk = await this.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 })
+        .then(() => true).catch(e => { console.warn(`⚠️  Navigation failed: ${e.message}`); return false; });
+      if (!navOk) { rejected.push(url); continue; }
+    }
+    // Clear per attempt, so whatever a rejected candidate priced is dropped and
+    // the winning attempt's captures survive into the lookup step.
+    this._cpcByPim = {};
+    this._cpcRawByPim = {};
+    this._cpcVpcUrlByPim = {};
+    this._cpcLatest = null;
+    console.log(`📍 Setting dealer via postcode ${postcode} on ${url}`);
+    await handleLocationModal(this.page, postcode);
+    if (await _cpcModelPageLoaded(this.page)) { target = url; break; }
+    rejected.push(url);
+    console.warn(`⚠️  ${url} — no calculator UI after setting the dealer (landed on ${this.page.url()}) — trying the next candidate`);
+  }
+
+  if (!target) {
+    // Distinguish "the slug is wrong" from "this environment can't resolve a
+    // dealer at all" — on Dev the suburb/postcode API answers 200 with [] for
+    // every query, so no postcode can ever set a dealer and the calculator
+    // redirects to its landing page. That is an environment data problem, and
+    // saying so beats reporting it as a missing pimId three steps later.
+    const loc = this._lastLocationApi;
+    const locNote = loc
+      ? (loc.count === 0
+          ? `\nThe location lookup (${loc.url}) returned HTTP ${loc.status} with 0 suburbs, so NO dealer can be set on this environment — postcode "${postcode}" is not the problem. Check the suburb/postcode data is published here, or run against an environment where it is.`
+          : `\nLocation lookup returned ${loc.count} suburb(s) — the dealer data is fine, so the model slug is the likely problem.`)
+      : '\nNo location lookup response was seen at all.';
+    assert.fail(
+      `CPC calculator never rendered for postcode "${postcode}". Tried:\n  - ${rejected.join('\n  - ')}` +
+      `\nROAP model = "${this.roapModel || ''}". Currently on ${this.page.url()}.${locNote}`);
+  }
+  console.log(`✅ CPC model calculator open: ${target}`);
+
+  // Wait for the first variantpricecalculator response (fires once the dealer is
+  // set and the default variant prices).
+  for (let i = 0; i < 30 && !this._cpcLatest; i++) await this.page.waitForTimeout(500);
+  assert.ok(this._cpcLatest,
+    'No variantpricecalculator response was captured after setting the dealer.');
+  console.log(`📋 Captured CPC pricing API — default variant pimId=${this._cpcLatest.pimId}`);
 });
 
-When('I locate the vehicle whose serviceId equals the FCAI', async function () {
-  assert.ok(this._cpcCarPriceCalc, 'CPC pricing API not captured — the set-dealer step must run first.');
-  assert.ok(this.fcai, 'FCAI not set.');
-  const rec = _findVariantByServiceId(this._cpcCarPriceCalc, this.fcai);
-  assert.ok(rec, `No CPC variant with serviceId=${this.fcai} in the carpricecalculator response.`);
-  this.cpcPrice = _toNum(rec.price);
-  this.cpcPriceEstimate = _toNum(rec.priceEstimate);
-  console.log(`📌 CPC serviceId ${this.fcai}: variantGroup="${rec.variantGroup}", price=${this.cpcPrice}, priceEstimate=${this.cpcPriceEstimate}`);
+// 25 min: the sweep can run two full passes (~4-7 min each on a model with as
+// many combinations as KONA) and must not be cut off mid-walk — a truncated walk
+// reports "not found" for a variant that simply hadn't been reached yet.
+When(/^I locate the vehicle whose (?:Pim value matches|serviceId equals the FCAI)$/i, { timeout: 25 * 60 * 1000 }, async function () {
+  assert.ok(this.pim, 'Pim not set.');
+  const want = String(this.pim).trim();
+  this._cpcByPim = this._cpcByPim || {};
+  // Exact match first, then a leading-zero/whitespace-tolerant one, so a
+  // test-data "0920" still matches a CPC "920".
+  const normPim = (s) => String(s == null ? '' : s).trim().replace(/^0+(?=\d)/, '');
+  const matched = () => {
+    if (this._cpcByPim[want]) return this._cpcByPim[want];
+    const w = normPim(want);
+    for (const [k, r] of Object.entries(this._cpcByPim)) if (normPim(k) === w) return r;
+    return null;
+  };
 
-  // Surface the carpricecalculator response (the matched serviceId variant) in
-  // the report's API Payload panel. The `source` includes "verification" so
-  // world.js's findFormSubmissionCall picks THIS call over any tracking XHRs.
+  // The default variant already fired a variantpricecalculator on load. If it
+  // isn't the target, walk every option combination — each selection fires a
+  // fresh variantpricecalculator — and stop as soon as the matching pimId lands.
+  // Two passes with opposite group orderings. Which group constrains which
+  // differs by model (on KONA Electric the N Line pack limits the powertrain;
+  // elsewhere it can be the reverse), and a group is only enumerated under the
+  // state its ancestors left behind — so one ordering can never reach every
+  // combination on every model. The second pass only runs if the first missed.
+  let walk = { found: false, aborted: false, clicks: 0 };
+  for (const packsFirst of [true, false]) {
+    if (matched()) break;
+    console.log(`🔎 Searching calculator combinations for pimId=${want} (packs ${packsFirst ? 'before' : 'after'} powertrain) …`);
+    const pass = await _cpcSelectAllCombosUntil(this.page, async () => !!matched(), { packsFirst })
+      .catch(err => { console.warn(`⚠️  CPC combination walk error: ${err.message}`); return { found: false, aborted: true, clicks: 0 }; });
+    walk = { found: pass.found, aborted: walk.aborted || pass.aborted, clicks: walk.clicks + pass.clicks };
+    console.log(`🔎 Pass finished after ${pass.clicks} selection(s) — ${Object.keys(this._cpcByPim).length} distinct pimId(s) seen so far`);
+    if (pass.found || pass.aborted) break;
+  }
+
+  const rec = matched();
+  if (!rec) {
+    const all = Object.entries(this._cpcByPim).map(([pid, r]) =>
+      `pimId=${pid} (${r.description || r.variantId || '?'}) MLP=${r.mlp} DriveAway=${r.driveaway}`);
+    // Say plainly whether the sweep actually completed — an aborted walk means
+    // "not found yet", not "this variant doesn't exist on the calculator".
+    const how = walk.aborted
+      ? `the combination walk ABORTED early after ${walk.clicks} selection(s) (page closed or click cap reached), so not every combination was tried`
+      : `every combination was selected (${walk.clicks} selection(s))`;
+    assert.fail(
+      `No CPC variant with pimId=${want} — ${how}. ` +
+      `Seen ${all.length} pimId(s):\n  - ${all.join('\n  - ') || '(none — no variantpricecalculator responses captured)'}`
+    );
+  }
+
+  this.cpcPrice = _toNum(rec.mlp);
+  this.cpcPriceEstimate = _toNum(rec.driveaway);
+  // The calculator can return a variant with no driveaway estimate at all —
+  // flag it rather than letting the comparison fail on a NaN.
+  if (!(Number.isFinite(this.cpcPriceEstimate) && this.cpcPriceEstimate > 0)) {
+    this.cpcPriceEstimate = null;
+    this.cpcDriveawayUnavailable = true;
+    console.log(`⚠️  CPC returned no driveaway estimate for pimId ${want}`);
+  }
+  console.log(`📌 CPC pimId ${want}: MLP(price)=${this.cpcPrice}, DriveAway(priceEstimate)=${this.cpcPriceEstimate ?? 'not available'}${rec.description ? ` [${rec.description}]` : ''}`);
+
+  // Surface the matched variantpricecalculator response in the report's API
+  // Payload panel. The `source` includes "verification" so world.js's
+  // findFormSubmissionCall picks THIS call over any tracking XHRs.
   if (Array.isArray(this._capturedApiPayloads)) {
     this._capturedApiPayloads.push({
-      url: this._cpcCarPriceCalcUrl || 'carpricecalculator',
+      url: (this._cpcVpcUrlByPim && this._cpcVpcUrlByPim[want]) || 'variantpricecalculator',
       method: 'GET',
       requestBody: '',
       requestHeaders: {},
       statusCode: 200,
       responseHeaders: { 'content-type': 'application/json' },
-      responseBody: JSON.stringify(rec, null, 2),
+      responseBody: (this._cpcRawByPim && this._cpcRawByPim[want]) || JSON.stringify(rec, null, 2),
       timestamp: new Date().toISOString(),
-      source: 'roap-carpricecalculator-verification',
+      source: 'roap-variantpricecalculator-verification',
     });
-    console.log(`📎 carpricecalculator payload (serviceId ${this.fcai}) captured for the report`);
+    console.log(`📎 variantpricecalculator payload (pimId ${want}) captured for the report`);
   }
 });
 
-Then('I verify the CPC priceEstimate matches the ROAP MLP', async function () {
-  // Confirmed mapping: ROAP MLP  ==  CPC `price`.
+// Confirmed mapping: ROAP MLP  ==  CPC `mlpFromPIM` (falling back to `mlp`),
+// which is what _extractPimRecord puts in rec.mlp -> this.cpcPrice.
+// The legacy "priceEstimate" wording is still accepted so the step keeps
+// matching a Confluence feature that hasn't been re-worded yet — but it was
+// always a misnomer: priceEstimate is a driveaway field, not an MLP one.
+Then(/^I verify the CPC (?:mlpFromPIM|priceEstimate) matches the ROAP MLP$/i, async function () {
   assert.ok(Number.isFinite(this.roapMlp), 'ROAP MLP not captured.');
-  assert.ok(Number.isFinite(this.cpcPrice), 'CPC price not captured.');
+  assert.ok(Number.isFinite(this.cpcPrice), 'CPC mlpFromPIM not captured.');
   const diff = Math.abs(this.roapMlp - this.cpcPrice);
-  console.log(`🔍 MLP check — ROAP MLP=$${this.roapMlp} vs CPC price=$${this.cpcPrice} (diff ${diff.toFixed(2)})`);
-  assert.ok(diff <= 1, `MLP mismatch: ROAP MLP $${this.roapMlp} != CPC price $${this.cpcPrice}`);
+  console.log(`🔍 MLP check — ROAP MLP=$${this.roapMlp} vs CPC mlpFromPIM=$${this.cpcPrice} (diff ${diff.toFixed(2)})`);
+  assert.ok(diff <= 1, `MLP mismatch: ROAP MLP $${this.roapMlp} != CPC mlpFromPIM $${this.cpcPrice}`);
+  // Remembered so the driveaway step can say "MLP is matching" in its note when
+  // this model has no driveaway offer to compare.
+  this.mlpMatched = true;
   console.log('✅ MLP matches');
 });
 
-Then('I verify the CPC Estimated Drive Away price matches the ROAP Driveaway Price', async function () {
-  // Confirmed mapping: ROAP Driveaway  ==  CPC `priceEstimate`.
-  assert.ok(Number.isFinite(this.roapDriveaway), 'ROAP Driveaway not captured.');
-  assert.ok(Number.isFinite(this.cpcPriceEstimate), 'CPC priceEstimate not captured.');
+// Confirmed mapping: ROAP Driveaway  ==  CPC `finalDriveAwayPrice` (falling back
+// to `priceEstimate`), which _extractPimRecord puts in rec.driveaway ->
+// this.cpcPriceEstimate. The world property keeps its legacy name; the field it
+// actually holds is finalDriveAwayPrice.
+// The older "Estimated Drive Away price" wording is still accepted so the step
+// keeps matching a Confluence feature that hasn't been re-worded yet.
+Then(/^I verify the CPC (?:finalDriveAwayPrice|Estimated Drive Away price) matches the ROAP Driveaway Price$/i, async function () {
+  const label = _driveawayModelLabel(this);
+  const roapMissing = !Number.isFinite(this.roapDriveaway);
+  const cpcMissing = !Number.isFinite(this.cpcPriceEstimate);
+
+  // The scenario only passes when BOTH prices verify. A model with no ROAP
+  // driveaway offer therefore fails — but with the plain-English reason rather
+  // than a selector-level error. The CPC estimate is deliberately not quoted:
+  // there is nothing on the ROAP side to compare it against.
+  if (roapMissing) {
+    const note = `Driveaway price is not available for this model (${label})`
+      + (this.mlpMatched ? ', but the MLP is matching.' : '.');
+    _setScenarioNote(this, note);
+    assert.fail(note);
+  }
+
+  // ROAP publishes a driveaway offer that the calculator doesn't show — that IS
+  // an inconsistency worth failing on.
+  if (cpcMissing) {
+    const note = `Driveaway price is not available for this model (${label}) on the calculator, but ROAP has a driveaway offer of $${this.roapDriveaway.toLocaleString()}.`;
+    _setScenarioNote(this, note);
+    assert.fail(note);
+  }
+
   const diff = Math.abs(this.roapDriveaway - this.cpcPriceEstimate);
-  console.log(`🔍 Driveaway check — ROAP Driveaway=$${this.roapDriveaway} vs CPC priceEstimate=$${this.cpcPriceEstimate} (diff ${diff.toFixed(2)})`);
-  assert.ok(diff <= 1, `Driveaway mismatch: ROAP Driveaway $${this.roapDriveaway} != CPC priceEstimate $${this.cpcPriceEstimate}`);
+  console.log(`🔍 Driveaway check — ROAP Driveaway=$${this.roapDriveaway} vs CPC finalDriveAwayPrice=$${this.cpcPriceEstimate} (diff ${diff.toFixed(2)})`);
+  assert.ok(diff <= 1, `Driveaway mismatch: ROAP Driveaway $${this.roapDriveaway} != CPC finalDriveAwayPrice $${this.cpcPriceEstimate}`);
   console.log('✅ Driveaway matches');
 });

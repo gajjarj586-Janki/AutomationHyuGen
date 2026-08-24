@@ -69,7 +69,16 @@ async function stepFetchData() {
   const sheetNames = Object.keys(sheets);
   console.log(`✅ Loaded ${sheetNames.length} data sections: ${sheetNames.join(', ')}`);
 
-  // ── Resolve Active Environment from Environment Configuration ──
+  // ── Resolve Active Environment (Step 1.5) ──
+  await resolveActiveEnvironment(sheets);
+  return sheets;
+}
+
+// Resolve which environment is active (Confluence "Environment Configuration"
+// Status = Yes) and write .cache/activeEnvironment.json. Split out of
+// stepFetchData so it can also run on the --skip-fetch path — the report upload
+// depends on this cache to target the correct "<env> Report" column.
+async function resolveActiveEnvironment(sheets) {
   banner('Step 1.5 — Resolve Active Environment from Confluence');
   const envConfig = sheets['Environment Configuration'] || [];
   const envUrls = sheets['Environment URLs'] || [];
@@ -142,6 +151,15 @@ async function stepFetchData() {
   console.log(`✅ Active environment config written to .cache/activeEnvironment.json`);
 
   return sheets;
+}
+
+// Resolve the active environment when the full fetch step is skipped
+// (--skip-fetch). Reads just enough from Confluence to (re)write the env cache
+// so the report upload still targets the correct "<env> Report" column.
+async function ensureEnvironmentResolved() {
+  const { default: ConfluenceReader } = await import('../utils/confluenceReader.js');
+  const sheets = await ConfluenceReader.readAllSheets();
+  await resolveActiveEnvironment(sheets);
 }
 
 async function stepFetchFeatures() {
@@ -346,6 +364,9 @@ async function orchestrate() {
         await stepFetchFeatures();
       } else {
         console.log('⏭  Skipping fetch (--skip-fetch)');
+        // Still resolve the active environment so the report upload targets the
+        // correct "<env> Report" column (e.g. "Dev Report").
+        await ensureEnvironmentResolved();
       }
       if (skipGenerate) {
         console.log('⏭  Skipping step generation (--skip-generate)');
@@ -387,19 +408,12 @@ async function orchestrate() {
       } else {
         const passed = stepRunTests(tags);
         if (!passed) {
-          banner('Step 3.1 — Tests Failed — Triggering Auto-Fix Loop');
-          console.log('⚠️  Tests failed. Automatically invoking Claude fix loop to repair step definitions.\n');
-          const { spawnSync } = await import('node:child_process');
-          const claudeFixArgs = ['scripts/claudeFixLoop.js'];
-          if (tags) claudeFixArgs.push('--tags', tags);
-          console.log(`▶ node ${claudeFixArgs.join(' ')}\n`);
-          const fixResult = spawnSync(process.execPath, claudeFixArgs, {
-            stdio: 'inherit',
-            cwd: ROOT,
-          });
-          if (fixResult.status !== 0) {
-            console.log('\n⚠️  Fix loop exited with remaining failures — generating report from last run.');
-          }
+          // Do NOT auto-iterate. A failing test stops here and we go straight to
+          // report generation from this run. Run the auto-fix loop only on demand
+          // with `--claude-fix` (or `--mcp-fix`) when you actually want it.
+          banner('Step 3.1 — Tests Failed — Stopping (no auto-fix)');
+          console.log('⚠️  Tests failed. Skipping the auto-fix loop and generating the report from this run.');
+          console.log('    To run the fix loop, re-run with:  npm run agent:claude-fix   (or --mcp-fix)\n');
         }
       }
     } else {

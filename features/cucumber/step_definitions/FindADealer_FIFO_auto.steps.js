@@ -618,9 +618,70 @@ Then(/^user transits to \/find-a-dealer\/book-a-service link$/, async function (
   assert.ok(url.includes('book-a-service') || url.includes('find-a-dealer'), `Expected URL to contain book-a-service, got: ${url}`);
 });
 
+// ── Book a Service: text helpers ─────────────────────────────────────────────
+// The Quote & Book a Service journey ends in a third-party (xtime) booking
+// widget that can render inside a child frame, so `page.content()` — which only
+// returns the top-level document — is not enough. Gather visible text from the
+// main document AND every child frame before asserting.
+async function _visibleTextAllFrames(page) {
+  const parts = [];
+  for (const frame of page.frames()) {
+    const text = await frame.locator('body').innerText({ timeout: 3000 }).catch(() => '');
+    if (text) parts.push(text);
+  }
+  return parts.join('\n');
+}
+
+// Poll until `predicate(text)` holds or the deadline passes. Returns the last
+// text read either way, so the caller can assert on it and report what it saw.
+async function _waitForFrameText(page, predicate, timeoutMs = 20000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const text = await _visibleTextAllFrames(page);
+    if (predicate(text) || Date.now() >= deadline) return text;
+    await page.waitForTimeout(1000);
+  }
+}
+
+// Signals that the booking/quote UI rendered, and that the rego lookup resolved
+// a real vehicle (the VIN is shown in the vehicle context bar).
+const _BOOKING_UI_RE = /maintenance package|individual services|factory schedule|what does your .+ need/i;
+const _VIN_RE = /VIN[:\s]*([A-HJ-NPR-Z0-9]{11,17})/i;
+
+Then('the service booking flow is displayed for the resolved dealer', async function () {
+  const _row = _bookAServiceRow(this);
+  const _wantDealer = (_row['Dealer'] || _row['Dealer Name'] || _row['Service Dealer'] || _row['Preferred Dealer'] || '').toString().trim();
+  console.log(`📋 Verifying booking flow loaded${_wantDealer ? ` for dealer "${_wantDealer}"` : ''}`);
+
+  const _text = await _waitForFrameText(this.page, (t) =>
+    _BOOKING_UI_RE.test(t) && _VIN_RE.test(t) &&
+    (!_wantDealer || t.toLowerCase().includes(_wantDealer.toLowerCase())));
+
+  const _vin = (_text.match(_VIN_RE) || [])[1] || '';
+  // Match the dealer name only when the next line is its address (state + 4-digit
+  // postcode) — a bare "...Hyundai" line also matches nav items like "Price your Hyundai".
+  const _dealer = (_text.match(
+    /^[ \t]*([A-Z][\w'&.\- ]*Hyundai)[ \t]*\r?\n[ \t]*.*\b(?:NSW|VIC|QLD|SA|WA|TAS|NT|ACT)\b[ \t]+\d{4}\b/m,
+  ) || [])[1] || '';
+  console.log(`📋 Booking flow — dealer: "${_dealer || 'not detected'}", VIN: "${_vin || 'not detected'}"`);
+
+  assert.ok(_BOOKING_UI_RE.test(_text),
+    'Expected the service booking UI (maintenance package / service selection) to be displayed after the rego lookup');
+  assert.ok(_VIN_RE.test(_text),
+    'Expected the resolved vehicle VIN to be displayed after the rego lookup');
+  if (_wantDealer) {
+    assert.ok(_text.toLowerCase().includes(_wantDealer.toLowerCase()),
+      `Expected the booking flow to show dealer "${_wantDealer}" from test data`);
+  }
+
+  this.scenarioNote = `Booking flow loaded${_dealer ? ` for ${_dealer}` : ''}${_vin ? ` (VIN ${_vin})` : ''}`;
+});
+
+// Generic dealer-message check, kept for any feature that asserts a specific
+// dealer status string. Frame-aware and polling, unlike a one-shot content()
+// match — but note it only passes when the message is genuinely rendered.
 Then('message shows Dealer {string}', async function (message) {
-  await this.page.waitForTimeout(1000);
-  const content = await this.page.content();
   console.log(`📋 Checking for dealer message: "${message}"`);
-  assert.ok(content.includes(message), `Expected page to contain: "${message}"`);
+  const _text = await _waitForFrameText(this.page, (t) => t.includes(message), 15000);
+  assert.ok(_text.includes(message), `Expected page to contain: "${message}"`);
 });

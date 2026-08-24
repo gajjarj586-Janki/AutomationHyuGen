@@ -79,24 +79,25 @@ function findLatestScenarioScreenshot(scenarioName, featureName) {
 function findAuxiliaryScreenshots(kind) {
   if (!fs.existsSync(SCREENSHOTS_DIR)) return [];
   const allSources = {
-    pim:  { re: /^pim-Variant_Pricing-(.+)-\d{4}-\d{2}-\d{2}T/i, label: (k) => `PIM Variant Pricing (${k})` },
-    roap: { re: /^roap-Driveaway-(.+)-\d{4}-\d{2}-\d{2}T/i,      label: (k) => `ROAP Driveaway (${k})` },
+    pim:  { re: /^pim-Variant_Pricing-(.+)-(\d{4}-\d{2}-\d{2}T[\d-]+Z)\.png$/i, label: (k) => `PIM Variant Pricing (${k})` },
+    roap: { re: /^roap-Driveaway-(.+)-(\d{4}-\d{2}-\d{2}T[\d-]+Z)\.png$/i,      label: (k) => `ROAP Driveaway (${k})` },
   };
   const sources = kind && allSources[kind] ? [allSources[kind]] : Object.values(allSources);
-  const files = fs.readdirSync(SCREENSHOTS_DIR)
-    .filter((f) => /\.png$/i.test(f))
-    .sort((left, right) => right.localeCompare(left));
+  const files = fs.readdirSync(SCREENSHOTS_DIR).filter((f) => /\.png$/i.test(f));
   const out = [];
-  const seen = new Set();
-  for (const f of files) {
-    for (const src of sources) {
+  // Each scenario run captures ONE screenshot per source. Include only the
+  // single most-recent one per source (by timestamp) so stale files left in the
+  // directory from earlier runs — e.g. an old FCAI-keyed capture when the flow
+  // now keys by Pim — never appear as extra images in the report.
+  for (const src of sources) {
+    let best = null;
+    for (const f of files) {
       const m = f.match(src.re);
       if (!m) continue;
-      if (seen.has(m[1])) break;
-      seen.add(m[1]);
-      out.push({ label: src.label(m[1]), path: path.join(SCREENSHOTS_DIR, f) });
-      break;
+      const ts = m[2];
+      if (!best || ts > best.ts) best = { key: m[1], ts, file: f };
     }
+    if (best) out.push({ label: src.label(best.key), path: path.join(SCREENSHOTS_DIR, best.file) });
   }
   return out;
 }
@@ -315,6 +316,7 @@ function flattenResults(cucumberJson) {
       // Read metadata JSON file saved by world.js (has the real navigated testUrl)
       // This is the most reliable source — it captures the actual browser URL
       let successMessage = '';
+      let scenarioNote = '';
       const featureFileKey = (feature.uri || featureName || '')
         .replace(/\\/g, '/')
         .split('/')
@@ -329,6 +331,7 @@ function flattenResults(cucumberJson) {
         if (fs.existsSync(metaPath)) {
           const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
           if (meta.testUrl) testUrl = meta.testUrl;  // Always prefer metadata URL
+          if (meta.note) scenarioNote = String(meta.note);
           if (meta.successMessage) {
             successMessage = typeof meta.successMessage === 'string'
               ? meta.successMessage
@@ -374,8 +377,11 @@ function flattenResults(cucumberJson) {
         duration: steps.reduce((sum, s) => sum + s.duration, 0),
         error: failed?.error || '',
         failedStep: failed ? `${failed.keyword} ${failed.name}` : '',
-        errorSummary: errorSummary.summary,
+        // A passing scenario can still carry a note (e.g. "Driveaway price is
+        // not available for this model") — show it in the same column.
+        errorSummary: errorSummary.summary || scenarioNote,
         errorDetail: errorSummary.detail,
+        note: scenarioNote,
         screenshotPath: findLatestScenarioScreenshot(scenario.name || 'Unnamed Scenario', featureFileKey),
         extraScreenshots: (() => {
           const name = scenario.name || '';
@@ -585,7 +591,7 @@ function buildHTML(cases, stats) {
       <th style="width:70px;text-align:center;">Status</th>
       <th style="width:340px;">Screenshot</th>
       <th style="width:360px;">API Payload</th>
-      <th style="width:220px;">Failure Summary</th>
+      <th style="width:220px;">Summary</th>
     </tr>
   </thead>
   <tbody>
