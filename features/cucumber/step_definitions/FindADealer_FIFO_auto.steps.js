@@ -71,11 +71,17 @@ async function _fillLocation(page, postcode) {
 // as a custom dropdown trigger — clicking it opens a list of options. This helper
 // clicks the input, waits for the option list, then clicks the matching option.
 async function _setDealerType(page, typeLabel) {
+  // The map + search widget on this page loads asynchronously and can be slow
+  // on the stage environment — let network activity settle before checking
+  // for the loader class, otherwise we can start polling before the widget's
+  // own JS/Maps bundle has even started loading.
+  await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
+
   // Wait for the FAD section loader to finish (`hyu-loader` class is removed when ready)
   await page.waitForFunction(() => {
     const el = document.querySelector('.hyu-fad-section');
     return !el || !el.className.split(/\s+/).includes('hyu-loader');
-  }, { timeout: 10000 }).catch(() => {});
+  }, { timeout: 20000 }).catch(() => {});
 
   // The dealer-type input is a custom dropdown — its options are NOT visible until
   // the wrapper `.type-input.js-type-input` is clicked (NOT the inner #dealer-type input).
@@ -83,7 +89,19 @@ async function _setDealerType(page, typeLabel) {
   // IMPORTANT: avoid broad `label:has-text("Service")` selectors — they match the
   // page section header `<label class="h3">Finance & Services</label>`.
   const trigger = page.locator('.type-input.js-type-input').first();
-  await trigger.waitFor({ state: 'visible', timeout: 10000 });
+  try {
+    await trigger.waitFor({ state: 'visible', timeout: 20000 });
+  } catch {
+    // Surface exactly what was (or wasn't) on the page instead of a bare
+    // Playwright timeout — a blank widget here means the search/map section
+    // itself never rendered, not that the selector is wrong.
+    const widgetPresent = await page.locator('.hyu-fad-section').count().catch(() => 0);
+    throw new Error(
+      `Dealer type toggle ("${typeLabel}") never became visible after 20s. ` +
+      `${widgetPresent > 0 ? 'The .hyu-fad-section widget is present but its content (map/search bar) did not render — likely a slow/failed load of the search widget on this run.' : 'The .hyu-fad-section widget itself is not present on the page at all.'} ` +
+      `Current URL: ${page.url()}`
+    );
+  }
   await trigger.scrollIntoViewIfNeeded().catch(() => {});
   // Try normal click; if intercepted by an overlay, retry with force
   try {
@@ -577,17 +595,34 @@ When('the user fills State from test data', async function () {
 
 When('click on Search Vehicle button', async function () {
   console.log('📋 Clicking Search Vehicle button (Quote & Book a Service form)');
-  // Targeted search-vehicle button (the FAD Quote & Book a Service form has
-  // a `.btn-search-vehicle` / `button[type=submit]` inside the modal/form).
-  const btn = this.page.locator([
+  // Targeted search-vehicle button — confirmed live markup is
+  // <button type="submit" class="btn btn-search-vehicle js-search-vehicle">.
+  //
+  // IMPORTANT: try each selector individually, most-specific first, and stop
+  // at the first one that's actually visible. `locator('a, b, c').first()`
+  // does NOT try `a` before `b` — it returns whichever match comes first in
+  // DOCUMENT ORDER across all of them combined. The generic
+  // `button:has-text("Search")[type="submit"]` also matches the HIDDEN global
+  // header search button (`button.search-submit[aria-label="Search submit"]`),
+  // which sits earlier in the DOM than this form — so `.first()` silently
+  // grabbed that invisible header button instead of the real one, and every
+  // click on it was a no-op (the scenario then just sat on the dealer page).
+  const candidateSelectors = [
     'button.js-search-vehicle',
     'button.btn-search-vehicle',
+    'form.js-book-service--rego-form button[type="submit"]',
     'button:has-text("Search Vehicle")',
-    'button:has-text("Search")[type="submit"]',
-    'form[class*="book-a-service"] button[type="submit"]',
-    '[class*="vehicle-search"] button[type="submit"]',
-  ].join(', ')).first();
-  if ((await btn.count()) > 0 && await btn.isVisible().catch(() => false)) {
+  ];
+  let btn = null;
+  for (const sel of candidateSelectors) {
+    const candidate = this.page.locator(sel).first();
+    if ((await candidate.count()) > 0 && await candidate.isVisible().catch(() => false)) {
+      btn = candidate;
+      console.log(`📋 Search Vehicle button matched via: ${sel}`);
+      break;
+    }
+  }
+  if (btn) {
     await btn.scrollIntoViewIfNeeded().catch(() => {});
     try { await btn.click({ timeout: 8000 }); }
     catch { await btn.click({ force: true, timeout: 5000 }); }

@@ -8,7 +8,7 @@
  */
 import { Given, When, Then } from '@cucumber/cucumber';
 import { strict as assert } from 'node:assert';
-import { handleLocationModal } from './commonHelpers.js';
+import { handleLocationModal, describeFieldIssues, SUCCESS_TEXT_RE, formatSubmissionFailure } from './commonHelpers.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -665,6 +665,8 @@ Given('the user clicks Submit request', async function () {
 Then('the BATD submission is successful', async function () {
   console.log('📋 Verifying BATD submission success');
 
+  const modal = batdModal(this.page, this);
+
   // Step 1: Wait for the "processing" spinner/message to disappear (up to 15s)
   await this.page.waitForFunction(() => {
     const wrappers = Array.from(document.querySelectorAll('.modal-wrapper'));
@@ -678,15 +680,46 @@ Then('the BATD submission is successful', async function () {
     return !text.includes('We are processing your request');
   }, { timeout: 20000 }).catch(() => console.log('⚠️ Processing state did not clear in 20s — checking text anyway'));
 
-  // Step 2: Check the modal text for success keywords
-  const modalText = await batdModal(this.page, this).textContent().catch(() => '');
-  console.log(`📋 Modal text after submit: "${modalText.trim().substring(0, 200)}"`);
+  // Step 2: Poll the genuinely VISIBLE panel text for success keywords, up to
+  // 45s. The modal keeps every wizard step mounted at once, so `textContent()`
+  // also picks up mounted-but-hidden panels (e.g. a stray "Confirm" button
+  // label) and can false-positive — `innerText` respects the step-toggling
+  // `display:none` and reflects only what's actually on screen. The regex
+  // itself also avoids bare words like "confirm" that legitimately appear on
+  // a still-open form (a "Confirm" button, an "I confirm..." consent label).
+  // The equivalent CAD check observed this site's enquiry submission taking
+  // longer than a 20s budget in practice, so this uses the same wider budget
+  // with progress logging rather than a silent wait.
+  let modalText = '';
+  const _pollStart = Date.now();
+  const _deadline = _pollStart + 45000;
+  let _lastLog = 0;
+  for (;;) {
+    const _elapsed = Date.now() - _pollStart;
+    if (_elapsed - _lastLog >= 5000) {
+      console.log(`⏳ Still waiting for BATD confirmation… ${Math.round(_elapsed / 1000)}s elapsed`);
+      _lastLog = _elapsed;
+    }
+    modalText = (await modal.innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
+    if (SUCCESS_TEXT_RE.test(modalText)) {
+      console.log(`✅ BATD submission confirmed: "${modalText.slice(0, 200)}"`);
+      return;
+    }
+    if (Date.now() >= _deadline) break;
+    await this.page.waitForTimeout(1000);
+  }
+  console.log(`📋 Visible modal panel after submit: "${modalText.slice(0, 200)}"`);
 
-  assert.ok(
-    /thank|success|confirm|submitted|request received|all done/i.test(modalText),
-    `BATD submission confirmation not found. Modal text: "${modalText.substring(0, 300)}"`
-  );
-  console.log('✅ BATD submission confirmed');
+  // Failed — surface exactly which field is at fault, LEADING the message
+  // with it, so a dev can act on it immediately instead of re-running the
+  // test to find out.
+  const issues = await describeFieldIssues(modal);
+
+  assert.fail(formatSubmissionFailure(
+    'BATD submission was not confirmed',
+    issues,
+    [`Modal still shows: "${modalText.slice(0, 200)}"`]
+  ));
 });
 
 // ── Auto-appended steps ──────────────────────────────────────────

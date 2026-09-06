@@ -14,6 +14,7 @@
  */
 import { Given, When, Then } from '@cucumber/cucumber';
 import { strict as assert } from 'node:assert';
+import { describeFieldIssues, SUCCESS_TEXT_RE, formatSubmissionFailure } from './commonHelpers.js';
 
 // ─── Helper: the modal that is actually on screen ─────────────
 // The CPC page mounts four `.modal-wrapper` elements at once — "Email me the
@@ -613,40 +614,89 @@ Then('the CAD submission is successful', async function () {
     return !active.textContent.includes('We are processing your request');
   }, [_header], { timeout: 20000 }).catch(() => console.log('⚠️ Processing state did not clear in 20s'));
 
-  // Try header-scoped modal text first; fall back to any visible modal (header may change to "Thank you" after submit)
-  let modalText = await modal.textContent().catch(() => '');
-  // Track whether ANY modal-wrapper is currently visible — closed modal == success signal
-  const anyVisibleModal = await this.page.evaluate(() => {
-    const wrappers = Array.from(document.querySelectorAll('.modal-wrapper'));
-    return wrappers.some(el => parseFloat(window.getComputedStyle(el).opacity) > 0.5);
-  }).catch(() => true);
-  if (!modalText.trim()) {
-    modalText = await this.page.evaluate(() => {
+  // Poll for up to 45s more before giving up. The spinner-clear wait above
+  // can itself time out on a slow stage response, and even after it clears
+  // the confirmation can render well after that — observed in practice: the
+  // modal was still showing the unsubmitted form at the last 20s-budget poll,
+  // then reached "All done!" moments after this step had already reported
+  // failure. This site's enquiry submission is just slow sometimes, so the
+  // budget is generous; logging progress makes that visible instead of a
+  // silent wait.
+  let anyVisibleModal = true, modalText = '', successInModal = false, visibleOnPage = false, urlOk = false, apiSuccess = false;
+  const _pollStart = Date.now();
+  const _deadline = _pollStart + 45000;
+  let _lastLog = 0;
+  for (;;) {
+    const _elapsed = Date.now() - _pollStart;
+    if (_elapsed - _lastLog >= 5000) {
+      console.log(`⏳ Still waiting for CAD confirmation… ${Math.round(_elapsed / 1000)}s elapsed`);
+      _lastLog = _elapsed;
+    }
+    // Track whether ANY modal-wrapper is currently visible.
+    anyVisibleModal = await this.page.evaluate(() => {
       const wrappers = Array.from(document.querySelectorAll('.modal-wrapper'));
-      const visible = wrappers.filter(el => parseFloat(window.getComputedStyle(el).opacity) > 0.5);
-      return visible.map(el => el.textContent).join(' ');
-    }).catch(() => '');
+      return wrappers.some(el => parseFloat(window.getComputedStyle(el).opacity) > 0.5);
+    }).catch(() => true);
+
+    // Only genuinely visible text counts. The modal keeps every wizard step mounted
+    // in the DOM at once, so `textContent()` picks up mounted-but-hidden panels too
+    // (e.g. a stray "Confirm" button label) and can false-positive — `innerText`
+    // respects the step-toggling `display:none` and reflects only what's on screen.
+    // Try header-scoped modal text first; fall back to any visible modal (header may
+    // change to "Thank you" after submit).
+    modalText = anyVisibleModal ? (await modal.innerText().catch(() => '')) : '';
+    if (!modalText.trim()) {
+      modalText = await this.page.evaluate(() => {
+        const wrappers = Array.from(document.querySelectorAll('.modal-wrapper'));
+        const visible = wrappers.filter(el => parseFloat(window.getComputedStyle(el).opacity) > 0.5);
+        return visible.map(el => el.innerText).join(' ');
+      }).catch(() => '');
+    }
+    modalText = modalText.replace(/\s+/g, ' ').trim();
+    // Deliberately excludes bare "confirm"/"enquiry" — those appear on an
+    // UN-submitted CAD form too (a "Confirm" button, an "I confirm..." consent
+    // label, a "Your enquiry details" review step) and previously caused this
+    // check to pass even when the form never actually submitted.
+    successInModal = SUCCESS_TEXT_RE.test(modalText);
+    // Fallback: check page-level elements or URL
+    const success = this.page.locator('[class*="thank"], [class*="success"], [class*="confirm"], [class*="all-done"]').first();
+    visibleOnPage = (await success.count()) > 0 && (await success.isVisible().catch(() => false));
+    urlOk = /thank|success|confirm/i.test(this.page.url());
+    if (successInModal || visibleOnPage || urlOk) break;
+    if (Date.now() >= _deadline) break;
+    await this.page.waitForTimeout(1000);
   }
-  const successInModal = /all done|thank|success|submitted|confirm|request received|enquiry/i.test(modalText);
-  // Fallback: check page-level elements or URL
-  const success = this.page.locator('[class*="thank"], [class*="success"], [class*="confirm"], [class*="all-done"]').first();
-  const visibleOnPage = (await success.count()) > 0 && (await success.isVisible().catch(() => false));
-  const url = this.page.url();
-  // API-level signal: a 2xx POST to a leads/enquiry/contact endpoint indicates success
-  const apiSuccess = Array.isArray(this.networkResponses) && this.networkResponses.some(r =>
+  // API-level signal is informational only — a 2xx response proves a request was
+  // made, not that the form actually confirmed on screen (e.g. it can succeed
+  // while a required dropdown was left blank and the UI never advances).
+  apiSuccess = Array.isArray(this.networkResponses) && this.networkResponses.some(r =>
     r && r.status >= 200 && r.status < 300 && /lead|enquir|contact|submit|dealer/i.test(r.url || '')
   );
-  // If modal closed AND there was no visible error message, treat as success
   const errorVisible = await this.page.locator('[class*="error"]:visible, [role="alert"]:visible').count().catch(() => 0);
-  const modalClosedClean = !anyVisibleModal && errorVisible === 0;
-  console.log(`📋 CAD modal text after submit: "${modalText.trim().slice(0, 200)}" | anyVisibleModal=${anyVisibleModal} apiSuccess=${apiSuccess} modalClosedClean=${modalClosedClean}`);
-  assert.ok(
-    successInModal || visibleOnPage || /thank|success|confirm/i.test(url) || apiSuccess || modalClosedClean,
-    'the CAD submission is successful'
-  );
-  // Signal success so the generic API status step's fallback passes
-  this.successMessage = { displayed: true };
-  console.log('✅ CAD submission confirmed');
+  console.log(`📋 CAD modal text after submit: "${modalText.slice(0, 200)}" | anyVisibleModal=${anyVisibleModal} apiSuccess(informational)=${apiSuccess} errorVisible=${errorVisible}`);
+
+  if (successInModal || visibleOnPage || urlOk) {
+    // Signal success so the generic API status step's fallback passes
+    this.successMessage = { displayed: true };
+    console.log('✅ CAD submission confirmed');
+    return;
+  }
+
+  // Failed — surface exactly which field is at fault, LEADING the message
+  // with it, so a dev can act on it immediately instead of re-running the
+  // test to find out.
+  const issues = anyVisibleModal ? await describeFieldIssues(modal) : [];
+
+  assert.fail(formatSubmissionFailure(
+    'CAD submission was not confirmed',
+    issues,
+    [
+      anyVisibleModal
+        ? `Modal still shows: "${modalText.slice(0, 200)}"`
+        : 'Modal closed with no confirmation text/element/URL change — this alone does not prove success',
+      `API response captured (informational, not sufficient alone): ${apiSuccess}`,
+    ]
+  ));
 });
 
 Given('user clicks on Book a valuation', async function () {
@@ -972,8 +1022,11 @@ Then('the BAV submission is successful', async function () {
   let formPost = null;
   let panelText = '';
   for (;;) {
+    // A non-2xx form POST (e.g. a 400 from a field the site itself rejected) is
+    // not success — only count a request whose response actually succeeded.
     formPost = (this._capturedApiPayloads || [])
-      .filter(p => (p.method === 'POST' || p.method === 'PUT') && !_TRACKING.test(p.url))
+      .filter(p => (p.method === 'POST' || p.method === 'PUT') && !_TRACKING.test(p.url)
+        && (p.responseStatus || p.statusCode) >= 200 && (p.responseStatus || p.statusCode) < 300)
       .pop() || null;
     panelText = modal ? await visiblePanelText(modal) : '';
     const successText = /all done|thank you|thanks|booking (request )?(received|confirmed)|we'?ll be in touch|submitted/i.test(panelText);
@@ -987,19 +1040,20 @@ Then('the BAV submission is successful', async function () {
 
   if (!formPost && !successText && !successUrl) {
     // Surface why it failed — usually the form is still on Contact details
-    // with validation errors because a field never got filled.
-    const errors = modal
-      ? await modal.locator('.error:visible, [class*="error"]:visible, [class*="invalid"]:visible')
-          .allInnerTexts().catch(() => [])
-      : [];
+    // with validation errors because a field never got filled. Lead with the
+    // culprit itself rather than a generic "not submitted" headline.
+    const issues = modal ? await describeFieldIssues(modal) : [];
     const seen = (this._capturedApiPayloads || [])
       .filter(p => p.method === 'POST' || p.method === 'PUT')
-      .map(p => p.url.split('?')[0]).slice(0, 6);
-    assert.fail(
-      'BAV booking was not submitted — no form POST was captured and no confirmation was shown.\n' +
-      `  Modal still shows: "${panelText.slice(0, 200)}"\n` +
-      `  Validation errors: ${errors.filter(Boolean).join(' | ') || 'none visible'}\n` +
-      `  POSTs seen (tracking only): ${seen.join(' | ') || 'none'}`);
+      .map(p => `${p.url.split('?')[0]} → ${p.responseStatus || p.statusCode || 'no response'}`).slice(0, 6);
+    assert.fail(formatSubmissionFailure(
+      'BAV booking was not submitted',
+      issues,
+      [
+        `Modal still shows: "${panelText.slice(0, 200)}"`,
+        `POST/PUT requests seen: ${seen.join(' | ') || 'none'}`,
+      ]
+    ));
   }
 
   if (formPost) {

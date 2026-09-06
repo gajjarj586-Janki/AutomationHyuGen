@@ -10,6 +10,7 @@
  */
 import { Given, When, Then } from '@cucumber/cucumber';
 import { strict as assert } from 'node:assert';
+import { formatSubmissionFailure } from './commonHelpers.js';
 
 Given('the user has loaded the test data from the Confluence Page {string}', async function (param) {
   // Test data is loaded in the Before hook from Confluence
@@ -384,17 +385,17 @@ When('the user submits the test drive booking', async function () {
 });
 
 Then('the booking should be submitted successfully', async function () {
-  // Check if we already have a successful API response from direct fetch
+  // A direct-fetch fallback call (used when the site's own AJAX submit never fired)
+  // is a synthetic request built by the test itself — it proves the API endpoint
+  // works, not that the real on-page form submitted. Log it only; never pass on it.
   const directApiCall = (this._capturedApiPayloads || []).find(p =>
     p._fromDirectFetch && p.statusCode >= 200 && p.statusCode < 300
   );
   if (directApiCall) {
-    console.log(`📋 Booking submitted via direct API: status ${directApiCall.statusCode}`);
-    this.successMessage = { displayed: true, text: `API ${directApiCall.statusCode} OK` };
-    return;
+    console.log(`ℹ️ Direct API fallback returned ${directApiCall.statusCode} (informational only — does not confirm on-page submission)`);
   }
 
-  // Wait for the success page — the page shows "All done!" and
+  // Require an actual on-page confirmation — the page shows "All done!" and
   // "Your test drive booking request has been submitted successfully."
   for (let i = 0; i < 15; i++) {
     await this.page.waitForTimeout(1000);
@@ -409,16 +410,70 @@ Then('the booking should be submitted successfully', async function () {
     if ((await successEl.count()) > 0 && (await successEl.isVisible().catch(() => false))) {
       const text = await successEl.textContent().catch(() => '');
       console.log(`📋 Success element visible: ${text?.substring(0, 100)}`);
-      return;
-    }
-    const submitBtn = this.page.locator('button:has-text("Submit"), button[type="submit"]').first();
-    const submitVisible = (await submitBtn.count()) > 0 && (await submitBtn.isVisible().catch(() => false));
-    if (!submitVisible && i > 3) {
-      console.log(`📋 Form submitted (submit button gone after ${i}s)`);
+      this.successMessage = { displayed: true, text };
       return;
     }
   }
-  assert.fail('Expected success message after form submission');
+
+  this.successMessage = { displayed: false };
+
+  // Gather diagnostics so the report explains *why* it failed, not just that it did.
+  const pageUrl = this.page.url();
+  const submitBtn = this.page.locator(
+    'form.test-drive button:has-text("Submit request"), form.hyu-page-form button:has-text("Submit"), ' +
+    '.hyu-page-form button[type="submit"], button:has-text("Submit"), button[type="submit"]'
+  ).first();
+  const submitStillVisible = (await submitBtn.count()) > 0 && (await submitBtn.isVisible().catch(() => false));
+  const visibleError = this.page.locator('.invalid-feedback, .field-error, [class*="error"], [role="alert"]').first();
+  const errorText = (await visibleError.count()) > 0 && (await visibleError.isVisible().catch(() => false))
+    ? ((await visibleError.textContent().catch(() => '')) || '').trim().substring(0, 200)
+    : '';
+  const realFormPost = (this._capturedApiPayloads || []).some(p => !p._fromDirectFetch);
+
+  // Check whether the required Model/Powertrain dropdowns actually had a selectable
+  // value — a common root cause: the Powertrain list renders empty for a model, so
+  // the required field is left blank and the browser silently blocks submission.
+  const describeEmptyDropdown = async (selector, label) => {
+    const el = this.page.locator(selector).first();
+    if ((await el.count()) === 0 || !(await el.isVisible().catch(() => false))) return null;
+    const options = (await el.locator('option').allTextContents()).map(o => o.trim()).filter(Boolean);
+    const selectable = options.filter(o => !/^select|^please choose|^choose/i.test(o));
+    if (selectable.length === 0) {
+      return `the ${label} dropdown has no selectable options${options.length ? ` (only placeholder text: "${options.join(', ')}")` : ' (it is empty)'} — this required field could not be filled, so the form is blocked from submitting`;
+    }
+    return null;
+  };
+  const modelIssue = await describeEmptyDropdown(
+    'select[name="ModelOfinterest__c"], select#test-drive-page-model-pcm2, select[name*="model" i]', 'Model'
+  );
+  const powertrainIssue = await describeEmptyDropdown(
+    'select[name="FuelType__c"], select#test-drive-page-energy-type', 'Powertrain'
+  );
+
+  const reasons = [];
+  if (modelIssue) reasons.push(modelIssue);
+  if (powertrainIssue) reasons.push(powertrainIssue);
+  if (submitStillVisible) {
+    reasons.push('the Submit button is still visible, suggesting the click was blocked (e.g. by a missing/invalid required field or unchecked consent checkbox) or the form never actually submitted');
+  }
+  if (!realFormPost && directApiCall) {
+    reasons.push(`the form's own JS never fired a submission API call — only a synthetic fetch() built by the test succeeded (status ${directApiCall.statusCode}), which does not prove the real form works`);
+  }
+  if (!realFormPost && !directApiCall) {
+    reasons.push('no form submission API call (real or fallback) was captured at all');
+  }
+  if (errorText) {
+    reasons.push(`a visible validation/error message was found on the page: "${errorText}"`);
+  }
+  // Lead the message with the actual culprit (e.g. an empty Powertrain
+  // dropdown) instead of a generic "no confirmation appeared" headline —
+  // that's the bold line shown in the report, so burying the real cause a
+  // few lines down made it easy to miss.
+  assert.fail(formatSubmissionFailure(
+    'Expected an on-page success confirmation after form submission, but none appeared',
+    reasons,
+    [`Current URL: ${pageUrl}`]
+  ));
 });
 
 When('the user submits the booking without completing required fields', async function () {

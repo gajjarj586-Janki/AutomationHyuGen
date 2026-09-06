@@ -184,8 +184,24 @@ function humanizeFieldEvidence(errorMessage) {
   return { summary, detail };
 }
 
-function summarizeError(errorMessage, failedStepName, failedStatus) {
-  const error = String(errorMessage || '').trim();
+// Cucumber's `error_message` is the assertion/error message PLUS its full
+// stack trace glued together. Matching regexes against that whole blob is
+// unreliable — e.g. Cucumber's own internal frame name
+// `wrapPromiseWithTimeout` contains the substring "Timeout", so the
+// /Timeout/i check below used to fire on almost every failure regardless of
+// cause, discarding the real (and possibly multi-line) message. Strip
+// everything from the first "    at ..." stack line onward before matching
+// or displaying anything.
+function stripStackTrace(error) {
+  const lines = error.split('\n');
+  const stackStart = lines.findIndex((line) => /^\s*at\s/.test(line));
+  const kept = stackStart === -1 ? lines : lines.slice(0, stackStart);
+  return kept.join('\n').trim();
+}
+
+function summarizeError(errorMessageRaw, failedStepName, failedStatus) {
+  const errorRaw = String(errorMessageRaw || '').trim();
+  const error = stripStackTrace(errorRaw) || errorRaw;
   if (!error && failedStatus === 'undefined') {
     return {
       summary: 'Step definition is missing for this scenario.',
@@ -230,7 +246,7 @@ function summarizeError(errorMessage, failedStepName, failedStatus) {
   if (/Did not expect visible validation errors/i.test(error)) {
     return {
       summary: 'Validation errors remained visible after submit.',
-      detail: error.split('\n')[0],
+      detail: error,
     };
   }
 
@@ -260,21 +276,29 @@ function summarizeError(errorMessage, failedStepName, failedStatus) {
   if (/Expected submission to be prevented/i.test(error)) {
     return {
       summary: 'Form submission was not blocked as expected.',
-      detail: error.split('\n')[0],
+      detail: error,
     };
   }
 
-  if (/Timeout/i.test(error)) {
+  // Only a genuine timeout message (e.g. Playwright's "Timeout Xms exceeded")
+  // lands here now that the stack trace (with its `wrapPromiseWithTimeout`
+  // internal frame name) has been stripped above.
+  if (/timeout/i.test(error)) {
     return {
       summary: failedStepName ? `Timed out while running: ${failedStepName}` : 'Scenario timed out.',
-      detail: error.split('\n')[0],
+      detail: error,
     };
   }
 
-  const firstLine = error.split('\n')[0].replace(/^AssertionError\s*\[[^\]]+\]:\s*/i, '').trim();
+  const lines = error.split('\n');
+  const firstLine = (lines[0] || '').replace(/^AssertionError\s*\[[^\]]+\]:\s*/i, '').trim();
+  const restLines = lines.slice(1).join('\n').trim();
   return {
     summary: firstLine || (failedStepName ? `Step failed: ${failedStepName}` : 'Scenario failed.'),
-    detail: firstLine === error ? '' : error,
+    // Keep every line beyond the first as detail (e.g. "Modal still shows: ..."
+    // / "Likely cause(s): ..." from the submission-check steps) — collapsing
+    // to just the first line is what hid the actual field-level diagnosis.
+    detail: restLines || (firstLine === error.trim() ? '' : error),
   };
 }
 

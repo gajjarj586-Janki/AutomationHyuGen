@@ -1,0 +1,361 @@
+<title>Test Agent Blueprint</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Expanded:wght@600;700;800&family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+  /* ============ TOKENS ============ */
+  :root{
+    --paper:#EDF1F5; --paper-2:#E2E9EF; --grid:#E1E8EE; --surface:#FFFFFF;
+    --ink:#142433; --ink-soft:#45566A; --line:#C3D0DA; --line-strong:#9FB2C0;
+    --accent:#C1712F; --accent-ink:#FFF6EC;
+    --data:#1F7A67; --data-ink:#E9FBF5;
+    --shadow:0 1px 2px rgba(20,36,51,.09), 0 8px 24px rgba(20,36,51,.05);
+    --font-display:'Archivo Expanded', 'Arial Narrow', sans-serif;
+    --font-body:'Public Sans', -apple-system, Segoe UI, sans-serif;
+    --font-mono:'IBM Plex Mono', ui-monospace, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#0B1E33; --paper-2:#0E2338; --grid:#0F273F; --surface:#102A44;
+      --ink:#E7F1FA; --ink-soft:#9FB7CC; --line:#23415C; --line-strong:#315875;
+      --accent:#E2984F; --accent-ink:#241300;
+      --data:#4FBFA0; --data-ink:#04211B;
+      --shadow:0 1px 2px rgba(0,0,0,.5), 0 8px 24px rgba(0,0,0,.3);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#0B1E33; --paper-2:#0E2338; --grid:#0F273F; --surface:#102A44;
+    --ink:#E7F1FA; --ink-soft:#9FB7CC; --line:#23415C; --line-strong:#315875;
+    --accent:#E2984F; --accent-ink:#241300;
+    --data:#4FBFA0; --data-ink:#04211B;
+    --shadow:0 1px 2px rgba(0,0,0,.5), 0 8px 24px rgba(0,0,0,.3);
+  }
+
+  /* ============ BASE ============ */
+  *{box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  @media (prefers-reduced-motion: reduce){ html{scroll-behavior:auto;} *{animation-duration:.001ms !important; transition-duration:.001ms !important;} }
+  body{
+    margin:0; background:
+      repeating-linear-gradient(0deg, transparent, transparent 31px, var(--grid) 32px),
+      repeating-linear-gradient(90deg, transparent, transparent 31px, var(--grid) 32px),
+      var(--paper);
+    color:var(--ink); font-family:var(--font-body); font-size:16px; line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  h1,h2,h3{font-family:var(--font-display); text-wrap:balance; margin:0; letter-spacing:.01em;}
+  p{margin:0 0 1em; max-width:62ch;}
+  a{color:var(--accent);}
+  a:focus-visible, button:focus-visible{outline:2px solid var(--accent); outline-offset:3px;}
+  code, .mono{font-family:var(--font-mono);}
+  .num{font-variant-numeric:tabular-nums;}
+
+  /* ============ RAIL NAV ============ */
+  .railnav{
+    position:fixed; left:16px; top:50%; transform:translateY(-50%);
+    display:flex; flex-direction:column; gap:9px; z-index:30;
+  }
+  .railnav a{
+    width:30px; height:30px; border-radius:3px; border:1px solid var(--line-strong);
+    background:var(--surface); color:var(--ink-soft); text-decoration:none;
+    display:flex; align-items:center; justify-content:center;
+    font-family:var(--font-mono); font-size:11px; font-weight:500;
+    box-shadow:var(--shadow); transition:color .15s, border-color .15s;
+  }
+  .railnav a:hover, .railnav a:focus-visible{color:var(--accent); border-color:var(--accent);}
+  @media (max-width:900px){ .railnav{display:none;} }
+
+  /* ============ SHEET (slide) ============ */
+  .sheet{
+    min-height:100svh; min-height:100vh;
+    display:flex; flex-direction:column; justify-content:center;
+    padding:5.5rem clamp(1.5rem, 6vw, 6rem);
+    border-bottom:1px solid var(--line);
+    position:relative;
+  }
+  .sheet-inner{max-width:920px; width:100%; margin:0 auto;}
+  .meta{display:flex; align-items:center; gap:.75rem; margin-bottom:1.1rem;}
+  .meta .idx{font-family:var(--font-mono); font-size:.8rem; color:var(--accent); font-weight:600;}
+  .meta .sep{width:26px; height:1px; background:var(--line-strong);}
+  .meta .kicker{font-family:var(--font-mono); font-size:.72rem; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-soft);}
+  .sheet h2{font-size:clamp(1.7rem, 3.4vw, 2.55rem); font-weight:800; margin-bottom:1.1rem; max-width:20ch;}
+  .sheet .lede{font-size:1.08rem; color:var(--ink-soft); max-width:56ch; margin-bottom:1.6rem;}
+  .pagefoot{position:absolute; right:clamp(1.5rem,6vw,6rem); bottom:1.6rem; font-family:var(--font-mono); font-size:.75rem; color:var(--ink-soft); font-variant-numeric:tabular-nums;}
+
+  /* ============ TITLE SLIDE ============ */
+  .title-block{border-top:1px solid var(--line-strong); border-bottom:1px solid var(--line-strong); padding:1rem 0; margin-top:2.4rem; display:flex; flex-wrap:wrap; gap:1.6rem 2.4rem;}
+  .title-block div{font-family:var(--font-mono); font-size:.78rem;}
+  .title-block b{display:block; color:var(--ink-soft); font-size:.68rem; letter-spacing:.1em; text-transform:uppercase; margin-bottom:.25rem; font-weight:500;}
+  .brandmark{font-family:var(--font-mono); font-size:.78rem; letter-spacing:.16em; text-transform:uppercase; color:var(--ink-soft); margin-bottom:2.2rem;}
+  .titlesheet h1{font-size:clamp(2.4rem, 6vw, 4.4rem); font-weight:800; line-height:1.02;}
+  .titlesheet .tagline{font-size:1.2rem; color:var(--ink-soft); max-width:44ch; margin-top:1rem;}
+
+  /* ============ CARDS / LISTS ============ */
+  .stack{display:flex; flex-direction:column; gap:.85rem;}
+  .problem-row{display:flex; gap:.9rem; align-items:baseline; padding:.85rem 0; border-bottom:1px solid var(--line);}
+  .problem-row:last-child{border-bottom:none;}
+  .problem-row .mark{font-family:var(--font-mono); color:var(--accent); font-size:.85rem; flex:0 0 auto;}
+  .problem-row p{margin:0; max-width:52ch;}
+
+  /* ============ PIPELINE DIAGRAM ============ */
+  .pipeline{display:flex; align-items:stretch; gap:0; margin-top:.5rem; flex-wrap:wrap;}
+  .node{
+    flex:1 1 150px; background:var(--surface); border:1px solid var(--line-strong); border-radius:3px;
+    padding:1rem .95rem; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:.5rem;
+  }
+  .tag{display:inline-flex; align-self:flex-start; font-family:var(--font-mono); font-size:.62rem; letter-spacing:.08em; text-transform:uppercase; padding:.18rem .5rem; border-radius:2px; font-weight:600;}
+  .tag.ai{background:var(--accent); color:var(--accent-ink);}
+  .tag.data{background:var(--data); color:var(--data-ink);}
+  .tag.engine{background:var(--paper-2); color:var(--ink-soft); border:1px solid var(--line-strong);}
+  .node h4{font-family:var(--font-body); font-weight:700; font-size:.95rem; margin:0;}
+  .node p{font-size:.83rem; color:var(--ink-soft); margin:0; max-width:none;}
+  .arrow{display:flex; align-items:center; justify-content:center; flex:0 0 34px; color:var(--line-strong); font-size:1.3rem;}
+  .arrow .v{display:none;}
+  @media (max-width:760px){
+    .pipeline{flex-direction:column;}
+    .arrow{flex-direction:row; height:26px;}
+    .arrow .h{display:none;} .arrow .v{display:inline;}
+  }
+  .loop-note{margin-top:1rem; font-size:.85rem; color:var(--ink-soft); font-style:normal;}
+  .loop-note .mono{color:var(--data);}
+
+  /* ============ CODE / GHERKIN ============ */
+  .codecard{
+    background:var(--surface); border:1px solid var(--line-strong); border-radius:4px;
+    box-shadow:var(--shadow); overflow-x:auto; margin:.2rem 0 1.2rem;
+  }
+  .codecard .bar{display:flex; gap:.4rem; padding:.6rem .9rem; border-bottom:1px solid var(--line);}
+  .codecard .bar span{width:8px; height:8px; border-radius:50%; background:var(--line-strong);}
+  .codecard pre{margin:0; padding:1.1rem 1.3rem; font-family:var(--font-mono); font-size:.83rem; line-height:1.75; white-space:pre;}
+  .gk{color:var(--data); font-weight:600;}
+  .gs{color:var(--accent); font-weight:600;}
+  .gv{color:var(--ink);}
+  .callout{
+    border-left:3px solid var(--accent); background:var(--paper-2); padding:.95rem 1.2rem;
+    border-radius:0 3px 3px 0; font-size:.92rem; max-width:60ch;
+  }
+  .callout b{color:var(--accent);}
+
+  /* ============ TABLE (report anatomy) ============ */
+  .table-scroll{overflow-x:auto; border:1px solid var(--line-strong); border-radius:4px; box-shadow:var(--shadow);}
+  table{border-collapse:collapse; width:100%; min-width:640px; background:var(--surface);}
+  th, td{padding:.65rem .8rem; text-align:left; font-size:.82rem; border-bottom:1px solid var(--line); vertical-align:top;}
+  th{font-family:var(--font-mono); font-size:.68rem; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-soft); background:var(--paper-2); font-weight:600;}
+  td.num, th.num{font-variant-numeric:tabular-nums; font-family:var(--font-mono);}
+  .chip{display:inline-block; padding:.15rem .55rem; border-radius:3px; font-family:var(--font-mono); font-size:.7rem; font-weight:600;}
+  .chip.pass{background:var(--data-ink); color:var(--data);}
+  .chip.fail{background:var(--accent-ink); color:var(--accent);}
+  .evidence{margin-top:1.3rem; font-size:.86rem; color:var(--ink-soft); max-width:60ch;}
+
+  /* ============ TWO COLUMN ============ */
+  .cols2{display:grid; grid-template-columns:1fr 1fr; gap:1.6rem; margin-top:.5rem;}
+  @media (max-width:760px){ .cols2{grid-template-columns:1fr;} }
+  .colcard{background:var(--surface); border:1px solid var(--line); border-radius:4px; padding:1.3rem 1.4rem; box-shadow:var(--shadow);}
+  .colcard.now{border-top:3px solid var(--ink-soft);}
+  .colcard.next{border-top:3px solid var(--accent);}
+  .colcard h4{font-family:var(--font-mono); font-size:.72rem; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-soft); margin-bottom:.7rem; font-weight:600;}
+  .colcard.next h4{color:var(--accent);}
+  .colcard ul, .colcard ol{margin:0; padding-left:1.1rem; font-size:.9rem; color:var(--ink);}
+  .colcard li{margin-bottom:.5rem;}
+  .proof{margin-top:1.4rem; padding-top:1.2rem; border-top:1px solid var(--line); font-size:.88rem; color:var(--ink-soft); max-width:66ch;}
+  .proof b{color:var(--ink);}
+
+  /* ============ RECAP ============ */
+  .recap-list{display:flex; flex-direction:column; gap:1.1rem; margin-top:.5rem;}
+  .recap-item{display:flex; gap:1.1rem; align-items:flex-start;}
+  .recap-item .n{font-family:var(--font-mono); font-size:1.1rem; color:var(--accent); font-weight:700; flex:0 0 auto;}
+  .recap-item h4{font-size:1.05rem; margin-bottom:.15rem;}
+  .recap-item p{font-size:.9rem; color:var(--ink-soft); margin:0;}
+  .ask-list{margin-top:1.6rem; padding-top:1.4rem; border-top:1px solid var(--line-strong);}
+  .ask-list h4{font-family:var(--font-mono); font-size:.72rem; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-soft); margin-bottom:.8rem; font-weight:600;}
+  .ask-list ol{margin:0; padding-left:1.2rem; font-size:.95rem;}
+  .ask-list li{margin-bottom:.5rem;}
+  .signoff{margin-top:2rem; font-family:var(--font-mono); font-size:.8rem; color:var(--ink-soft);}
+</style>
+
+<nav class="railnav" aria-label="Slide navigation">
+  <a href="#s1" aria-label="Title">01</a>
+  <a href="#s2" aria-label="The problem">02</a>
+  <a href="#s3" aria-label="How it works">03</a>
+  <a href="#s4" aria-label="Feature files">04</a>
+  <a href="#s5" aria-label="Demo">05</a>
+  <a href="#s6" aria-label="Reusability">06</a>
+  <a href="#s7" aria-label="What QA needs">07</a>
+  <a href="#s8" aria-label="Recap">08</a>
+</nav>
+
+<section class="sheet titlesheet" id="s1">
+  <div class="sheet-inner">
+    <div class="brandmark">Internal Platform Proposal</div>
+    <h1>Confluence<br>Test&nbsp;Agent</h1>
+    <p class="tagline">Runs your tests straight from Confluence — no code needed. It writes the test scripts itself, fixes them automatically when the website changes, and can be set up for a new project in about an afternoon.</p>
+    <div class="title-block">
+      <div><b>Built on</b>Playwright · Cucumber · Confluence · Claude</div>
+      <div><b>Status</b>Working on Hyundai Australia — proposing wider reuse</div>
+      <div><b>Audience</b>Devs &amp; QA leadership</div>
+      <div><b>Prepared by</b>Janki Gajjar · add date</div>
+    </div>
+  </div>
+  <div class="pagefoot num">01 / 08</div>
+</section>
+
+<section class="sheet" id="s2">
+  <div class="sheet-inner">
+    <div class="meta"><span class="idx num">01</span><span class="sep"></span><span class="kicker">Why this exists</span></div>
+    <h2>The usual way of testing breaks down fast.</h2>
+    <p class="lede">This is how automated testing normally works — before a framework like this exists.</p>
+    <div class="stack">
+      <div class="problem-row"><span class="mark">→</span><p>Only a developer can write or update a test. QA has an idea for a test case but has to wait in line for dev time.</p></div>
+      <div class="problem-row"><span class="mark">→</span><p>The smallest website change — even one nobody would call a "change," like a button's underlying code being swapped — breaks tests overnight. Not because the product is broken, but because the test was too fragile to notice the difference.</p></div>
+      <div class="problem-row"><span class="mark">→</span><p>Test results live in a technical dashboard that only engineers ever open — so QA leads and managers rarely see whether things are actually passing.</p></div>
+      <div class="problem-row"><span class="mark">→</span><p>Adding one new feature file means changing code and waiting for a developer to review and approve it — for something that's really just "test this form too."</p></div>
+    </div>
+  </div>
+  <div class="pagefoot num">02 / 08</div>
+</section>
+
+<section class="sheet" id="s3">
+  <div class="sheet-inner">
+    <div class="meta"><span class="idx num">02</span><span class="sep"></span><span class="kicker">How it works</span></div>
+    <h2>One pipeline, driven entirely from Confluence.</h2>
+    <p class="lede">Test cases, test data, and environment config live in Confluence tables — not in code. One command runs the whole loop.</p>
+    <div class="pipeline">
+      <div class="node"><span class="tag data">Confluence</span><h4>Config &amp; feature files</h4><p>Environment, test data and feature files, all as wiki tables.</p></div>
+      <div class="arrow"><span class="h">→</span><span class="v">↓</span></div>
+      <div class="node"><span class="tag data">Fetch</span><h4>Pull what's flagged</h4><p>Only feature files marked <code class="mono">Run = Yes</code> are downloaded.</p></div>
+      <div class="arrow"><span class="h">→</span><span class="v">↓</span></div>
+      <div class="node"><span class="tag engine">Scaffold</span><h4>Write the test</h4><p>Scans the real page first, then writes the step using the selector it actually found — no AI guesswork.</p></div>
+      <div class="arrow"><span class="h">→</span><span class="v">↓</span></div>
+      <div class="node"><span class="tag engine">Run</span><h4>Playwright + Cucumber</h4><p>Drives a real Chromium browser through every feature file.</p></div>
+      <div class="arrow"><span class="h">→</span><span class="v">↓</span></div>
+      <div class="node"><span class="tag ai">Self-heal</span><h4>AI fix loop</h4><p>Only on a real failure, Claude re-scans the live page and tries up to 5 times to find and fix the broken step.</p></div>
+      <div class="arrow"><span class="h">→</span><span class="v">↓</span></div>
+      <div class="node"><span class="tag data">Report</span><h4>Back to Confluence</h4><p>A PDF with pass/fail, screenshots &amp; API evidence lands on the same page.</p></div>
+    </div>
+    <p class="loop-note">One command closes the whole loop: <span class="mono">node scripts/agentOrchestrator.js</span></p>
+    <div class="callout" style="margin-top:1.1rem;"><b>Locking a script costs nothing.</b> Once a step file works the way you want, mark it <code class="mono">// @locked</code> — every future run skips it completely, so Claude is never called and no tokens are spent on it. Claude only switches on when a test genuinely fails, and even then it's capped at 5 attempts, each one re-checking the live page like the self-heal step above.</div>
+  </div>
+  <div class="pagefoot num">03 / 08</div>
+</section>
+
+<section class="sheet" id="s4">
+  <div class="sheet-inner">
+    <div class="meta"><span class="idx num">03</span><span class="sep"></span><span class="kicker">What QA actually writes</span></div>
+    <h2>Plain English in. A working test out.</h2>
+    <p class="lede">This is a complete, real feature file — nothing below it is hand-coded by a developer.</p>
+    <div class="codecard">
+      <div class="bar"><span></span><span></span><span></span></div>
+      <pre><span class="gs">Feature:</span> Hyundai Book a Test Drive flow
+
+  <span class="gs">Background:</span>
+    <span class="gk">Given</span> the user has loaded the test data from the Confluence page
+    <span class="gk">And</span> the user navigates to Test drive
+
+  <span class="gk">Scenario:</span> <span class="gv">User submits a test drive booking</span>
+    <span class="gk">Given</span> the user has selected a vehicle, powertrain and dealer
+    <span class="gk">When</span> the user enters a valid first name
+    <span class="gk">And</span> the user enters a valid email address
+    <span class="gk">And</span> the user enters a valid phone number
+    <span class="gk">And</span> the user accepts the privacy consent checkbox
+    <span class="gk">And</span> the user submits the test drive booking
+    <span class="gk">Then</span> the booking should be submitted successfully</pre>
+    </div>
+    <div class="callout"><b>You don't have to write even this by hand.</b> Describe the feature file in plain English and ask Claude to draft the Gherkin for you — QA reviews it, ticks <code class="mono">Run = Yes</code>, and the agent does the rest.</div>
+  </div>
+  <div class="pagefoot num">04 / 08</div>
+</section>
+
+<section class="sheet" id="s5">
+  <div class="sheet-inner">
+    <div class="meta"><span class="idx num">04</span><span class="sep"></span><span class="kicker">See it in action</span></div>
+    <h2>Does the price on the calculator match the price in our system?</h2>
+    <p class="lede">A real check the agent runs today: it logs into the internal pricing admin, reads a vehicle's Manufacturer List Price and Drive-Away price, opens the public Car Price Calculator, matches the same vehicle by its FCAI code, and confirms the two agree — to the cent — across every model and variant.</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th class="num">TC#</th><th>Feature File</th><th>Status</th><th>Screenshot</th><th>API Payload</th><th>Summary</th></tr></thead>
+        <tbody>
+          <tr><td class="num">04</td><td>KONA — Drive-Away price match</td><td><span class="chip pass">PASS</span></td><td>captured</td><td class="num">200</td><td>Admin: $34,500 · Calculator: $34,500</td></tr>
+          <tr><td class="num">05</td><td>TUCSON — Contact a dealer submission</td><td><span class="chip fail">FAIL</span></td><td>captured</td><td class="num">200</td><td>the Powertrain dropdown has no selectable options — required field could not be filled</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="evidence">Every row carries a screenshot and the raw API response as evidence, so anyone can audit <em>why</em> it passed. And when it fails, the summary names the exact field or condition at fault — never a bare "failed."</p>
+  </div>
+  <div class="pagefoot num">05 / 08</div>
+</section>
+
+<section class="sheet" id="s6">
+  <div class="sheet-inner">
+    <div class="meta"><span class="idx num">05</span><span class="sep"></span><span class="kicker">Beyond this project</span></div>
+    <h2>Built for Hyundai. Not built to stay Hyundai-only.</h2>
+    <div class="cols2">
+      <div class="colcard now">
+        <h4>Today</h4>
+        <ul>
+          <li>One repository. The generic engine — fetch, generate, self-heal, report — sits next to Hyundai's feature files and step definitions.</li>
+          <li>Starting a new project means cloning the whole repo, then manually deleting everything Hyundai-specific.</li>
+        </ul>
+      </div>
+      <div class="colcard next">
+        <h4>Proposed</h4>
+        <ul>
+          <li>Split the repo: a <strong>core engine</strong> (project-agnostic) and a thin <strong>project config</strong> layer (your Confluence page IDs, your feature files).</li>
+          <li>A new project starts from the core template with nothing to delete — just point it at your own Confluence page.</li>
+        </ul>
+      </div>
+    </div>
+    <p class="proof"><b>This already works, minus the packaging.</b> We tested exactly this path — pointed the framework at a different codebase and asked Claude to strip out everything Hyundai-specific. It produced a working base for a new project in under an hour. Packaging a clean starter template removes even that step.</p>
+  </div>
+  <div class="pagefoot num">06 / 08</div>
+</section>
+
+<section class="sheet" id="s7">
+  <div class="sheet-inner">
+    <div class="meta"><span class="idx num">06</span><span class="sep"></span><span class="kicker">Getting the team running</span></div>
+    <h2>No developer required for day-to-day use.</h2>
+    <div class="cols2">
+      <div class="colcard">
+        <h4>One-time setup</h4>
+        <ol>
+          <li>Install Node.js, Git, and VS Code.</li>
+          <li><code class="mono">npm install</code> and <code class="mono">npx playwright install</code>.</li>
+          <li>Add your own Confluence email + API token to <code class="mono">.env</code>.</li>
+        </ol>
+      </div>
+      <div class="colcard">
+        <h4>Every day</h4>
+        <ol>
+          <li>Open the Confluence Feature Files table.</li>
+          <li>Add or edit a test-data row, tick <code class="mono">Run = Yes</code>.</li>
+          <li>Run one command; read the PDF report on the same page.</li>
+        </ol>
+      </div>
+    </div>
+    <div class="callout" style="margin-top:1.6rem;"><b>New feature file?</b> Describe it in plain English and ask Claude to draft the Gherkin — no selectors, no Playwright code, ever, for QA to hand-write.</div>
+  </div>
+  <div class="pagefoot num">07 / 08</div>
+</section>
+
+<section class="sheet" id="s8">
+  <div class="sheet-inner">
+    <div class="meta"><span class="idx num">07</span><span class="sep"></span><span class="kicker">Where we go from here</span></div>
+    <h2>Four things worth remembering</h2>
+    <div class="recap-list">
+      <div class="recap-item"><span class="n num">01</span><div><h4>Not BAU-specific</h4><p>It isn't built for one fixed set of tests. Point it at any feature or page, describe the flow in plain English, and the same engine builds and runs it — already proven on a different codebase in under an hour.</p></div></div>
+      <div class="recap-item"><span class="n num">02</span><div><h4>Driven entirely by Confluence</h4><p>Test data, environment config, and which feature files run all live in wiki tables — QA changes them with no PR.</p></div></div>
+      <div class="recap-item"><span class="n num">03</span><div><h4>Self-healing</h4><p>Routine page changes are absorbed automatically; a genuine failure comes back with a named cause, not just "failed."</p></div></div>
+      <div class="recap-item"><span class="n num">04</span><div><h4>Caches what it already learned</h4><p>DOM maps, generated step code, and healed selectors persist between runs — re-testing a feature doesn't start from zero.</p></div></div>
+    </div>
+    <div class="ask-list">
+      <h4>For discussion</h4>
+      <ol>
+        <li>Approve packaging the core engine as a reusable starter template.</li>
+        <li>Nominate the next project to pilot it on.</li>
+        <li>Confirm rollout &amp; training time for the QA team.</li>
+      </ol>
+    </div>
+    <div class="signoff">Prepared by Janki Gajjar · add date</div>
+  </div>
+  <div class="pagefoot num">08 / 08</div>
+</section>

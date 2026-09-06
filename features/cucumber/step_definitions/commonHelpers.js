@@ -67,6 +67,106 @@ export async function handleLocationModal(page, postcode = '2000') {
 }
 
 /**
+ * Build a submission-failure message with the actual culprit LEADING the first
+ * line — reports (and terminal output) show that first line as the bold
+ * headline, so burying "the Powertrain dropdown is empty" a few lines down
+ * under a generic "submission not confirmed" headline is what made it easy
+ * to miss. Falls back to a plain "not confirmed" headline when no specific
+ * field issue was found.
+ */
+export function formatSubmissionFailure(label, issues, contextLines = []) {
+  const lead = issues.length
+    ? `${label} — likely cause: ${issues[0]}`
+    : `${label} — no confirmation appeared and no specific field issue was detected`;
+  const otherIssues = issues.length > 1
+    ? [`Other issue(s) also found: ${issues.slice(1).join(' | ')}`]
+    : [];
+  return [lead, ...contextLines, ...otherIssues]
+    .map((line, i) => (i === 0 ? line : `  ${line}`))
+    .join('\n');
+}
+
+/**
+ * Text that genuinely indicates a submission completed. Deliberately excludes
+ * bare words like "confirm" or "enquiry" — those show up on an UN-submitted
+ * form too (a "Confirm booking" button, an "I confirm..." consent checkbox
+ * label, a "Review your enquiry" heading), and matching on them alone is what
+ * caused submission-check steps to pass even when the form never actually
+ * went through.
+ */
+export const SUCCESS_TEXT_RE =
+  /all done|thank you|thanks (for|,)|we'?ll be in touch|request received|(enquiry|booking|request) (has been |request )?(received|submitted|confirmed)|submitted successfully/i;
+
+/**
+ * Inspect a submission form/modal for the specific field(s) blocking
+ * submission, so a failed assertion can name the culprit instead of just
+ * saying "not successful". Checks, in order:
+ *   1. Model / Powertrain dropdowns rendered with no selectable options
+ *      (a common root cause — the required field can never be filled).
+ *   2. Required text inputs (name/email/phone) left empty or flagged
+ *      invalid by the site's own validation.
+ *   3. Consent checkboxes left unchecked.
+ *   4. Any other visible inline validation/error text as a catch-all.
+ * Returns an array of human-readable strings; empty if nothing was found
+ * (the caller should say so rather than imply a field problem exists).
+ */
+export async function describeFieldIssues(modal) {
+  const issues = [];
+  if (!modal) return issues;
+
+  const dropdowns = [
+    { selectors: 'select[name="ModelOfinterest__c"], select[id*="model" i]', label: 'Model' },
+    { selectors: 'select[name="FuelType__c"], select[id*="energy" i], select[id*="powertrain" i], select[id*="fuel" i]', label: 'Powertrain' },
+  ];
+  for (const { selectors, label } of dropdowns) {
+    const el = modal.locator(selectors).first();
+    if ((await el.count().catch(() => 0)) === 0 || !(await el.isVisible().catch(() => false))) continue;
+    const options = (await el.locator('option').allTextContents().catch(() => [])).map(o => o.trim()).filter(Boolean);
+    const selectable = options.filter(o => !/^select|^please choose|^choose|^--/i.test(o));
+    if (selectable.length === 0) {
+      issues.push(`the ${label} dropdown has no selectable options${options.length ? ` (only placeholder text: "${options.join(', ')}")` : ' (it is empty)'} — this required field could not be filled, so the form is blocked from submitting`);
+    } else if (!(await el.inputValue().catch(() => ''))) {
+      issues.push(`the ${label} dropdown has options but none is selected`);
+    }
+  }
+
+  const textFields = [
+    { selectors: 'input[name*="first" i]', label: 'First Name' },
+    { selectors: 'input[name*="last" i]', label: 'Last Name' },
+    { selectors: 'input[type="email"], input[name*="email" i]', label: 'Email Address' },
+    { selectors: 'input[type="tel"], input[name*="phone" i]', label: 'Phone Number' },
+  ];
+  for (const { selectors, label } of textFields) {
+    const el = modal.locator(selectors).first();
+    if ((await el.count().catch(() => 0)) === 0 || !(await el.isVisible().catch(() => false))) continue;
+    const value = (await el.inputValue().catch(() => '')).trim();
+    const ariaInvalid = await el.getAttribute('aria-invalid').catch(() => null);
+    const cls = (await el.getAttribute('class').catch(() => '')) || '';
+    if (!value) issues.push(`${label} is empty`);
+    else if (ariaInvalid === 'true' || /is-invalid|invalid|error/i.test(cls)) issues.push(`${label} is marked invalid by the form (current value: "${value}")`);
+  }
+
+  const checkboxes = await modal.locator('input[type="checkbox"]').all().catch(() => []);
+  for (let i = 0; i < checkboxes.length; i++) {
+    const cb = checkboxes[i];
+    if (!(await cb.isVisible().catch(() => false))) continue;
+    if (!(await cb.isChecked().catch(() => false))) {
+      const name = (await cb.getAttribute('name').catch(() => ''))
+        || (await cb.getAttribute('id').catch(() => ''))
+        || `checkbox #${i + 1}`;
+      issues.push(`consent checkbox "${name}" is not checked`);
+    }
+  }
+
+  const genericErrors = (await modal
+    .locator('.error:visible, [class*="error"]:visible, [class*="invalid"]:visible, .invalid-feedback:visible')
+    .allInnerTexts().catch(() => [])).map(t => t.trim()).filter(Boolean);
+  genericErrors.forEach(t => issues.push(`visible validation message: "${t}"`));
+
+  return issues;
+}
+
+/**
  * Click a variant tile on the Hyundai consumer calculator
  * (e.g. "VENUE Active"). Tries exact text, role-based, then fuzzy.
  */

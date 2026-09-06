@@ -19,6 +19,7 @@
  */
 import { Given, When, Then } from '@cucumber/cucumber';
 import { strict as assert } from 'node:assert';
+import { formatSubmissionFailure } from './commonHelpers.js';
 
 Given('the user navigates to Contact a dealer page', async function () {
   // Setup network intercept listeners (captures all requests/responses for this page)
@@ -277,13 +278,16 @@ When('the user submits the contact a dealer form', async function () {
 });
 
 Then('the form should be submitted successfully', async function () {
-  // Multi-signal success check (mirrors contact_us / talk-to-an-expert):
+  // On-page success check (mirrors contact_us / talk-to-an-expert):
   //   1) visible thank-you / success / confirm element
   //   2) success-bearing URL (thank-you, success, confirm, complete)
   //   3) confirmation copy on the page
-  //   4) a 2xx form-submission API response captured by the network listener
-  // Wait up to 15s for any signal to appear — the CAD form sometimes redraws slowly
-  // after the API resolves.
+  // A captured 2xx form-submission API response is logged for diagnostics only —
+  // it does not by itself prove the form actually confirmed on screen (the API
+  // can succeed while the UI stays stuck on the form, e.g. a required dropdown
+  // had no selectable value so the submission never reflected in the page).
+  // Wait up to 15s for an on-page signal to appear — the CAD form sometimes
+  // redraws slowly after the API resolves.
   const _start = Date.now();
   let visible = false, urlOk = false, textOk = false, apiOk = false;
   while (Date.now() - _start < 15000) {
@@ -296,7 +300,7 @@ Then('the form should be submitted successfully', async function () {
     textOk = await this.page.getByText(
       /thank you|thank-you|we.?ll be in touch|received your enquiry|enquiry submitted|submitted successfully|we have received|your enquiry has been sent/i
     ).first().isVisible().catch(() => false);
-    // Form-submission endpoints (filter out tracking pixels)
+    // Form-submission endpoints (filter out tracking pixels) — informational only
     const _trackingDomains = /google|analytics|doubleclick|snapchat|linkedin|twitter|insight|marketo|mktoresp|facebook|gtag|pixel|hotjar|clarity|webevents/i;
     const _formPathPattern = /content\/api|\/api\/|\/form\/|\/submit|\/enquir|\/lead|\/contact-?a-?dealer|\/customer/i;
     apiOk = Array.isArray(this._capturedApiPayloads) && this._capturedApiPayloads.some(p =>
@@ -305,12 +309,67 @@ Then('the form should be submitted successfully', async function () {
       !_trackingDomains.test(p.url || '') &&
       _formPathPattern.test(p.url || '')
     );
-    if (visible || urlOk || textOk || apiOk) break;
+    if (visible || urlOk || textOk) break;
     await this.page.waitForTimeout(500);
   }
-  console.log(`📋 CAD success check — visibleEl=${visible} urlOk=${urlOk} textOk=${textOk} apiOk=${apiOk}`);
-  this.successMessage = { displayed: visible || textOk };
-  assert.ok(visible || urlOk || textOk || apiOk, 'the form should be submitted successfully');
+  console.log(`📋 CAD success check — visibleEl=${visible} urlOk=${urlOk} textOk=${textOk} apiOk(informational)=${apiOk}`);
+  this.successMessage = { displayed: visible || textOk || urlOk };
+
+  if (visible || urlOk || textOk) return;
+
+  // Failed — gather diagnostics so the report explains *why*, not just that it did.
+  const pageUrl = this.page.url();
+  const submitBtn = this.page
+    .locator('form button[type="submit"], .hyu-page-form button[type="submit"], .cad-form button[type="submit"], button[type="submit"]')
+    .filter({ hasNotText: /search|find|go|cancel/i })
+    .last();
+  const submitStillVisible = (await submitBtn.count()) > 0 && (await submitBtn.isVisible().catch(() => false));
+  const visibleError = this.page.locator('.invalid-feedback, .field-error, [class*="error"], [role="alert"]').first();
+  const errorText = (await visibleError.count()) > 0 && (await visibleError.isVisible().catch(() => false))
+    ? ((await visibleError.textContent().catch(() => '')) || '').trim().substring(0, 200)
+    : '';
+
+  // A required Model/Powertrain dropdown rendering with no selectable options is a
+  // common root cause: the field is left blank and the browser blocks submission.
+  const describeEmptyDropdown = async (selector, label) => {
+    const el = this.page.locator(selector).first();
+    if ((await el.count()) === 0 || !(await el.isVisible().catch(() => false))) return null;
+    const options = (await el.locator('option').allTextContents()).map(o => o.trim()).filter(Boolean);
+    const selectable = options.filter(o => !/^select|^please choose|^choose|^--/i.test(o));
+    if (selectable.length === 0) {
+      return `the ${label} dropdown has no selectable options${options.length ? ` (only placeholder text: "${options.join(', ')}")` : ' (it is empty)'} — this required field could not be filled, so the form is blocked from submitting`;
+    }
+    return null;
+  };
+  const modelIssue = await describeEmptyDropdown('#cad-page-model', 'Model');
+  const powertrainIssue = await describeEmptyDropdown(
+    '#cad-page-energy-type, select[name="FuelType__c"], select[id*="energy" i], select[id*="powertrain" i], select[id*="fuel" i]', 'Powertrain'
+  );
+
+  const reasons = [];
+  if (modelIssue) reasons.push(modelIssue);
+  if (powertrainIssue) reasons.push(powertrainIssue);
+  if (submitStillVisible) {
+    reasons.push('the Submit button is still visible, suggesting the click was blocked (e.g. by a missing/invalid required field) or the form never actually submitted');
+  }
+  if (apiOk) {
+    reasons.push('a 2xx form-submission API response was captured, but no on-page confirmation (text, element, or URL change) appeared — the API succeeding alone does not prove the UI confirmed submission');
+  } else if (!apiOk) {
+    reasons.push('no successful form-submission API response was captured either');
+  }
+  if (errorText) {
+    reasons.push(`a visible validation/error message was found on the page: "${errorText}"`);
+  }
+
+  // Lead the message with the actual culprit (e.g. an empty Powertrain
+  // dropdown) instead of a generic "no confirmation appeared" headline —
+  // that's the bold line shown in the report, so burying the real cause a
+  // few lines down made it easy to miss.
+  assert.fail(formatSubmissionFailure(
+    'Expected an on-page success confirmation after form submission, but none appeared',
+    reasons,
+    [`Current URL: ${pageUrl}`]
+  ));
 });
 
 When('the user leave the last name blank', async function () {

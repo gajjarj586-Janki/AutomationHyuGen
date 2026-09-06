@@ -71,7 +71,7 @@ Feature: Genesis Forms - Submit with all fields including Last Name shows Thank 
       | VIN                      | KMHLT4AG1NU000001        |
       | Registration Number      | ABC123                   |
       | Preferred Contact Method | Email                    |
-      | Preferred Date           | 2025-08-15               |
+      | Preferred Date           | 2026-10-15               |
       | Terms and Conditions     | Checked                  |
     And I click Submit
     Then I should see "Thank you" success message
