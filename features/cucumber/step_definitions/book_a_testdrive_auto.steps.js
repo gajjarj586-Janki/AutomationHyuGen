@@ -395,9 +395,19 @@ Then('the booking should be submitted successfully', async function () {
     console.log(`ℹ️ Direct API fallback returned ${directApiCall.statusCode} (informational only — does not confirm on-page submission)`);
   }
 
+  // Wait for the "We are processing your request..." interstitial to clear
+  // before polling for the confirmation text — same slow-stage-submission
+  // pattern as the CAD modal success check elsewhere in this suite. A prior
+  // run's failure screenshot caught this page still showing the interstitial
+  // at the moment the old 15s budget gave up.
+  await this.page.waitForFunction(() => {
+    return !document.body.innerText.includes('We are processing your request');
+  }, { timeout: 30000 }).catch(() => console.log('⚠️ "Processing your request" did not clear within 30s'));
+
   // Require an actual on-page confirmation — the page shows "All done!" and
   // "Your test drive booking request has been submitted successfully."
-  for (let i = 0; i < 15; i++) {
+  // Budget raised from 15s to 45s to match.
+  for (let i = 0; i < 45; i++) {
     await this.page.waitForTimeout(1000);
     const allDone = this.page.getByText(/all done|submitted successfully|booking request has been submitted|we.?ll be in touch/i).first();
     if ((await allDone.count()) > 0 && (await allDone.isVisible().catch(() => false))) {

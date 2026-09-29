@@ -20,53 +20,9 @@ Given('the user has loaded the test data from the Confluence page', async functi
     'Test data should be loaded from Confluence');
 });
 
-Given('the user is on the Hyundai Home page', async function () {
-  // Setup network intercept listeners (captures all requests/responses for this page)
-  if (!this._networkInterceptSetup) {
-    this.networkRequests = [];
-    this.networkResponses = [];
-    this.page.on('request', (req) => {
-      (this.networkRequests = this.networkRequests || []).push({ url: req.url(), method: req.method() });
-    });
-    this.page.on('response', async (res) => {
-      (this.networkResponses = this.networkResponses || []).push({ url: res.url(), status: res.status() });
-    });
-    this._networkInterceptSetup = true;
-    console.log('ðŸ“¡ Network intercept listeners active');
-  }
-  // pageKey variants: hyundai home
-  const _pageKeys = ["hyundai home"];
-  let url = '';
-  if (this.pageUrls) {
-    for (const _k of _pageKeys) {
-      if (this.pageUrls[_k]) { url = this.pageUrls[_k]; break; }
-    }
-    if (!url) {
-      // Fuzzy scan against keys
-      const _entry = _pageKeys.length && Object.entries(this.pageUrls).find(([k]) =>
-        _pageKeys.some(pk => pk && (k.includes(pk) || pk.includes(k))));
-      if (_entry) url = _entry[1];
-    }
-    if (!url) {
-      // Slug scan against URL paths â€” handles "customer care" â†’ ".../customer-care/..."
-      const _slugEntry = Object.entries(this.pageUrls).find(([, u]) => {
-        try {
-          const _p = new URL(u).pathname.toLowerCase();
-          return _pageKeys.some(pk => pk && (_p.includes(pk.replace(/\s+/g, '-')) || _p.includes(pk.replace(/\s+/g, ''))));
-        } catch { return false; }
-      });
-      if (_slugEntry) url = _slugEntry[1];
-    }
-  }
-  url = url || 'https://stage.hyundai.com.au/au/en';
-  console.log(`ðŸ“‹ Navigating to hyundai home: ${url}`);
-  if (url) {
-    await this.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-  } else {
-    await this.page.waitForLoadState('domcontentloaded');
-  }
-  await this.page.waitForTimeout(2000);
-});
+// 'the user is on the Hyundai Home page' is handled by the generic
+// `Given(/^the user is on the (.+?) page$/i, ...)` step in common_steps.js —
+// removed here to avoid an ambiguous-step-definition clash.
 
 When('the user clicks on Contact us in footer', async function () {
   // Auto-heal: tries button text, role=button, input[type=submit], link, aria-label fallbacks (scoped to <footer>)
@@ -74,6 +30,12 @@ When('the user clicks on Contact us in footer', async function () {
   await this.page.waitForTimeout(2000);
 });
 
+// 'the Customer Care page is displayed' and 'the Contact Us page is
+// displayed' are now handled by the generic
+// Then(/^the (.+?) page (?:should be|is) displayed$/, ...) step in
+// common_steps.js (identical slug/heading/title check) — the two duplicate
+// blocks below are removed to avoid an ambiguous-step-definition clash.
+/* removed-duplicate
 Then('the Customer Care page is displayed', async function () {
   await this.page.waitForLoadState('domcontentloaded');
   await this.page.waitForTimeout(1500);
@@ -97,6 +59,7 @@ Then('the Customer Care page is displayed', async function () {
   }
   assert.ok(_ok, `Page "${_pageName || 'expected'}" should be displayed (current URL: ${_curUrl})`);
 });
+*/
 
 When('the user clicks on Contact us', async function () {
   // Auto-heal: tries button text, role=button, input[type=submit], link, aria-label fallbacks
@@ -104,6 +67,7 @@ When('the user clicks on Contact us', async function () {
   await this.page.waitForTimeout(2000);
 });
 
+/* removed-duplicate
 Then('the Contact Us page is displayed', async function () {
   await this.page.waitForLoadState('domcontentloaded');
   await this.page.waitForTimeout(1500);
@@ -127,6 +91,7 @@ Then('the Contact Us page is displayed', async function () {
   }
   assert.ok(_ok, `Page "${_pageName || 'expected'}" should be displayed (current URL: ${_curUrl})`);
 });
+*/
 
 // â”€â”€ Auto-appended steps â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 

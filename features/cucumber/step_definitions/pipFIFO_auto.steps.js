@@ -284,7 +284,9 @@ When('the user selects Powertrain from test data', async function () {
     'select[id*="fuel" i]',
   ].join(', ')).first();
 
-  const visible = await dropdown.waitFor({ state: 'visible', timeout: 5000 }).then(() => true).catch(() => false);
+  // Timeout raised from 5s — under `parallel: 3` the Vue energy-type dropdown can take
+  // longer to populate while multiple browsers contend for the stage site at once.
+  const visible = await dropdown.waitFor({ state: 'visible', timeout: 20000 }).then(() => true).catch(() => false);
   if (visible) {
     await dropdown.scrollIntoViewIfNeeded().catch(() => {});
     const options = await dropdown.locator('option').allTextContents();

@@ -688,9 +688,12 @@ Then('the service booking flow is displayed for the resolved dealer', async func
   const _wantDealer = (_row['Dealer'] || _row['Dealer Name'] || _row['Service Dealer'] || _row['Preferred Dealer'] || '').toString().trim();
   console.log(`📋 Verifying booking flow loaded${_wantDealer ? ` for dealer "${_wantDealer}"` : ''}`);
 
+  // Timeout raised from the 20s default — under `parallel: 3` the third-party (xtime)
+  // booking widget iframe can take noticeably longer to render while 3 browsers are
+  // contending for the stage site at once.
   const _text = await _waitForFrameText(this.page, (t) =>
     _BOOKING_UI_RE.test(t) && _VIN_RE.test(t) &&
-    (!_wantDealer || t.toLowerCase().includes(_wantDealer.toLowerCase())));
+    (!_wantDealer || t.toLowerCase().includes(_wantDealer.toLowerCase())), 45000);
 
   const _vin = (_text.match(_VIN_RE) || [])[1] || '';
   // Match the dealer name only when the next line is its address (state + 4-digit

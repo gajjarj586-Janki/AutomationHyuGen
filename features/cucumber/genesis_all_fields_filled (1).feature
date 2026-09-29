@@ -1,5 +1,5 @@
 @Genesis @FormValidation @AllFieldsFilled @Positive
-Feature: Genesis Forms - Submit with all fields including Last Name shows Thank you
+Feature: Genesis Forms - Submit with all fields shows Thank you
 
   Background:
     Given I am a user on the Genesis website
@@ -68,7 +68,7 @@ Feature: Genesis Forms - Submit with all fields including Last Name shows Thank 
       | Email                    | TheTester@orchard.com.au |
       | Contact Number           | 0431667796               |
       | Postal Code              | 2000                     |
-      | VIN                      | KMHLT4AG1NU000001        |
+      | VIN                      | KMTG341AMPU126007        |
       | Registration Number      | ABC123                   |
       | Preferred Contact Method | Email                    |
       | Preferred Date           | 2026-10-15               |

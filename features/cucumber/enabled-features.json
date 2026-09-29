@@ -1,0 +1,16 @@
+{
+  "BATD-smoke.feature": "yes",
+  "CAD-smoke.feature": "yes",
+  "calculator_pricing.feature": "no",
+  "contact_us.feature": "yes",
+  "CPC-allFIFOs.feature": "yes",
+  "CPC-pageLoad.feature": "no",
+  "FindADealer-FIFO.feature": "yes",
+  "FleetReg-smoke.feature": "yes",
+  "genesis_all_fields_filled (1).feature": "yes",
+  "Ownership_smoke.feature": "yes",
+  "PIM.feature": "no",
+  "pipFIFO.feature": "yes",
+  "ROAP.feature": "no",
+  "talk-to-an-expert.feature": "yes"
+}

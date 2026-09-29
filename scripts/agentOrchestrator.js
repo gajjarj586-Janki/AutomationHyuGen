@@ -2,15 +2,19 @@
  * AI Test Agent Orchestrator
  *
  * Single-command pipeline that:
- *   1. Fetches test data from Confluence
- *   2. Downloads feature files from Confluence
- *   2.5 Auto-generates step definitions for any undefined steps
- *   3. Runs Cucumber tests via Playwright
- *   4. Generates a PDF report of the results
+ *   1. Auto-generates step definitions for any undefined steps
+ *   2. Runs Cucumber tests via Playwright
+ *   3. Generates a PDF report of the results and uploads it to Confluence
+ *
+ * Feature files and test data are NOT fetched from Confluence — they live
+ * permanently, git-tracked, in features/cucumber/ (see
+ * features/cucumber/test-data/localTestData.js). Every run executes every
+ * feature file (use `--tags` to run a subset). Which environment (Dev / Dev1
+ * / Stage / Production) tests run against is controlled by TARGET_ENVIRONMENT
+ * in .env — see .env.example.
  *
  * Usage:
  *   node scripts/agentOrchestrator.js                     # full pipeline (existing step files PRESERVED)
- *   node scripts/agentOrchestrator.js --skip-fetch          # reuse cached data & features
  *   node scripts/agentOrchestrator.js --skip-generate       # skip step def generation entirely
  *   node scripts/agentOrchestrator.js --update-steps        # re-generate / append-missing into existing step files
  *   node scripts/agentOrchestrator.js --report-only         # regenerate report from last run
@@ -61,125 +65,8 @@ function elapsed(start) {
 
 // ─── Pipeline Steps ──────────────────────────────────────────
 
-async function stepFetchData() {
-  banner('Step 1 — Fetch Test Data from Confluence');
-  // Importing the reader and caching data at startup validates connectivity
-  const { default: ConfluenceReader } = await import('../utils/confluenceReader.js');
-  const sheets = await ConfluenceReader.readAllSheets();
-  const sheetNames = Object.keys(sheets);
-  console.log(`✅ Loaded ${sheetNames.length} data sections: ${sheetNames.join(', ')}`);
-
-  // ── Resolve Active Environment (Step 1.5) ──
-  await resolveActiveEnvironment(sheets);
-  return sheets;
-}
-
-// Resolve which environment is active (Confluence "Environment Configuration"
-// Status = Yes) and write .cache/activeEnvironment.json. Split out of
-// stepFetchData so it can also run on the --skip-fetch path — the report upload
-// depends on this cache to target the correct "<env> Report" column.
-async function resolveActiveEnvironment(sheets) {
-  banner('Step 1.5 — Resolve Active Environment from Confluence');
-  const envConfig = sheets['Environment Configuration'] || [];
-  const envUrls = sheets['Environment URLs'] || [];
-
-  // Find which environment(s) have Status = "Yes"
-  const activeEnvs = envConfig.filter(r =>
-    r.Status && r.Status.toLowerCase().trim() === 'yes'
-  );
-
-  // Allow .env TARGET_ENVIRONMENT to override / supply the active env when
-  // Confluence has nothing flagged. We deliberately do NOT default to Production
-  // — silently switching to prod URLs is dangerous.
-  const envOverride = (process.env.TARGET_ENVIRONMENT || '').trim();
-
-  if (activeEnvs.length === 0) {
-    if (envOverride) {
-      console.log(`⚠️  No environment has Status = "Yes" in Confluence. Using TARGET_ENVIRONMENT=${envOverride} from .env.`);
-      activeEnvs.push({ Environment: envOverride, URL: '' });
-    } else {
-      console.log('⚠️  No environment has Status = "Yes" in Confluence and TARGET_ENVIRONMENT is not set in .env.');
-      console.log('   Defaulting to Stage to avoid accidentally hitting Production.');
-      activeEnvs.push({ Environment: 'Stage', URL: '' });
-    }
-  }
-
-  // Use the first active environment
-  const activeEnv = activeEnvs[0];
-  const activeEnvName = activeEnv.Environment || activeEnv.TestName || envOverride || 'Stage';
-
-  console.log(`📋 Environment Configuration from Confluence:`);
-  for (const row of envConfig) {
-    const marker = (row.Status || '').toLowerCase().trim() === 'yes' ? '✅' : '☐';
-    console.log(`   ${marker} ${row.Environment || row.TestName} — Status: ${row.Status || 'N/A'}`);
-  }
-  console.log(`\n🎯 Active Environment: ${activeEnvName}`);
-
-  // Build page URL map for the active environment.
-  // IMPORTANT: do NOT fall back to row['Production'] — if the active env cell is
-  // empty we want to know about it, not silently hit prod.
-  const pageUrlMap = {};
-  const missingUrlPages = [];
-  for (const row of envUrls) {
-    if (row.Page) {
-      const url = (row[activeEnvName] || '').trim();
-      pageUrlMap[row.Page.toLowerCase()] = url;
-      if (!url) missingUrlPages.push(row.Page);
-    }
-  }
-  console.log(`📋 Resolved ${Object.keys(pageUrlMap).length} page URLs for ${activeEnvName}`);
-  if (missingUrlPages.length > 0) {
-    console.log(`⚠️  No ${activeEnvName} URL configured for: ${missingUrlPages.join(', ')}`);
-    console.log(`   These pages will have an empty URL — add a value in the Confluence Environment URLs table.`);
-  }
-
-  // Write to cache so world.js and step definitions can read it
-  const cacheDir = path.join(ROOT, '.cache');
-  if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
-
-  const envCacheData = {
-    activeEnvironment: activeEnvName,
-    baseUrl: activeEnv.URL || '',
-    requiresAuth: activeEnv.RequiresAuth || 'No',
-    pageUrls: pageUrlMap,
-    resolvedAt: new Date().toISOString(),
-  };
-  fs.writeFileSync(
-    path.join(cacheDir, 'activeEnvironment.json'),
-    JSON.stringify(envCacheData, null, 2)
-  );
-  console.log(`✅ Active environment config written to .cache/activeEnvironment.json`);
-
-  return sheets;
-}
-
-// Resolve the active environment when the full fetch step is skipped
-// (--skip-fetch). Reads just enough from Confluence to (re)write the env cache
-// so the report upload still targets the correct "<env> Report" column.
-async function ensureEnvironmentResolved() {
-  const { default: ConfluenceReader } = await import('../utils/confluenceReader.js');
-  const sheets = await ConfluenceReader.readAllSheets();
-  await resolveActiveEnvironment(sheets);
-}
-
-async function stepFetchFeatures() {
-  banner('Step 2 — Download Selected Feature Files from Confluence');
-  const ok = run('node scripts/fetchFeatures.js', 'Fetch selected .feature attachments');
-  if (!ok) throw new Error('Feature file download failed');
-
-  // Count downloaded features
-  const featureFiles = fs.readdirSync(FEATURES_DIR).filter(f => f.endsWith('.feature'));
-  console.log(`✅ ${featureFiles.length} feature files in ${FEATURES_DIR}`);
-
-  if (featureFiles.length === 0) {
-    throw new Error('No feature files selected on Confluence page. Check the Feature Selection table and mark features with Run = Yes.');
-  }
-
-  return featureFiles;
-}
-
 async function stepGenerateStepDefs() {
-  banner('Step 2.5 — Auto-Generate Missing Step Definitions');
+  banner('Step 2 — Auto-Generate Missing Step Definitions');
   const { generateStepDefinitions } = await import('./generateStepDefs.js');
   const result = await generateStepDefinitions();
   if (result.generated > 0) {
@@ -203,7 +90,21 @@ function stepRunTests(tags) {
   // The deprecation warning is harmless — the file is still written correctly.
   const formatArg = '--format json:test-results/cucumber-report.json';
   const cmd = `npx cucumber-js --config cucumber.js ${formatArg}${tagArg}`;
+  const testRunStart = Date.now();
   const ok = run(cmd, `Cucumber${tags ? ` (${tags})` : ''}`);
+  const testRunDurationMs = Date.now() - testRunStart;
+
+  // Persist the actual wall-clock time Cucumber took (distinct from the
+  // pipeline's overall time, which also includes the Confluence fetch/upload
+  // steps) so the PDF report can show how long the tests themselves took.
+  try {
+    const cacheDir = path.join(ROOT, '.cache');
+    if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(cacheDir, 'lastTestRunDuration.json'),
+      JSON.stringify({ durationMs: testRunDurationMs, finishedAt: new Date().toISOString() }),
+    );
+  } catch { /* non-critical — report just omits the duration */ }
 
   if (fs.existsSync(RESULTS_JSON)) {
     const raw_content = fs.readFileSync(RESULTS_JSON, 'utf-8').trim();
@@ -230,39 +131,34 @@ async function stepGenerateAndUploadReports(runStartMs, reportOnly = false) {
   const { generatePDFForFeature, generatePDF } = await import('./generateReport.js');
   const { uploadReportToConfluence } = await import('./uploadReportToConfluence.js');
 
-  // Propagate active environment name so uploadReportToConfluence targets the
-  // env-specific column (e.g. "Stage Report" / "Production Report").
+  // The environment tests actually ran against is whatever TARGET_ENVIRONMENT
+  // in .env was for this whole process (world.js reads the same value) — no
+  // Confluence round-trip needed to know which "<env> Report" column to target.
+  const activeEnvironment = (process.env.TARGET_ENVIRONMENT || 'Stage').trim();
+  console.log(`   → Target Confluence column: "${activeEnvironment} Report"`);
+
+  // Report on whichever feature files cucumber.js actually ran this pass —
+  // the { filename: "yes"|"no" } map in features/cucumber/enabled-features.json
+  // (same resolution cucumber.js itself uses), falling back to every .feature
+  // file in FEATURES_DIR if that map is missing/unreadable.
+  let testedFeatureFiles;
   try {
-    const cachePath = path.join(ROOT, '.cache', 'activeEnvironment.json');
-    if (fs.existsSync(cachePath)) {
-      const cache = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
-      if (cache.activeEnvironment) {
-        // The report must target the column for the environment the tests
-        // ACTUALLY ran against (resolved into the cache) — NOT a stale
-        // TARGET_ENVIRONMENT left in .env. Otherwise a Production run gets
-        // logged under the Stage Report column.
-        if (process.env.TARGET_ENVIRONMENT && process.env.TARGET_ENVIRONMENT !== cache.activeEnvironment) {
-          console.log(`   → Ignoring TARGET_ENVIRONMENT="${process.env.TARGET_ENVIRONMENT}" from .env; using active environment "${cache.activeEnvironment}" from this run.`);
-        }
-        process.env.TARGET_ENVIRONMENT = cache.activeEnvironment;
-        console.log(`   → Target Confluence column: "${cache.activeEnvironment} Report"`);
-      }
-    }
-  } catch (e) {
-    console.warn(`   ⚠️  Could not read activeEnvironment.json: ${e.message}`);
+    const enabled = JSON.parse(fs.readFileSync(path.join(FEATURES_DIR, 'enabled-features.json'), 'utf-8'));
+    const TRUTHY = new Set(['yes', 'true', '1', 'y']);
+    const names = Object.entries(enabled)
+      .filter(([, v]) => TRUTHY.has(String(v).trim().toLowerCase()))
+      .map(([f]) => f);
+    testedFeatureFiles = names.length > 0 ? names : null;
+  } catch {
+    testedFeatureFiles = null;
+  }
+  if (!testedFeatureFiles) {
+    testedFeatureFiles = fs.readdirSync(FEATURES_DIR).filter(f => f.endsWith('.feature'));
   }
 
-  // Load the feature filenames that were selected for this run
-  const selectedCachePath = path.join(ROOT, '.cache', 'selectedFeatures.json');
-  let testedFeatureFiles = [];
-  if (fs.existsSync(selectedCachePath)) {
-    const selectedPaths = JSON.parse(fs.readFileSync(selectedCachePath, 'utf-8'));
-    testedFeatureFiles = selectedPaths.map(p => path.basename(p));
-  }
-
-  // Fallback: generate one combined report when no selection info is available
+  // Fallback: generate one combined report when no feature files are found
   if (testedFeatureFiles.length === 0) {
-    console.log('⚠️  No selected-feature cache found — generating combined report');
+    console.log('⚠️  No feature files found — generating combined report');
     const origArgv = process.argv;
     process.argv = [process.argv[0], process.argv[1], RESULTS_JSON];
     const result = await generatePDF();
@@ -338,7 +234,6 @@ async function stepGenerateAndUploadReports(runStartMs, reportOnly = false) {
 // ─── Main Orchestrator ───────────────────────────────────────
 async function orchestrate() {
   const args = process.argv.slice(2);
-  const skipFetch = args.includes('--skip-fetch');
   const skipGenerate = args.includes('--skip-generate');
   const updateSteps = args.includes('--update-steps');
   const reportOnly = args.includes('--report-only');
@@ -348,8 +243,8 @@ async function orchestrate() {
 
   const start = Date.now();
 
-  banner('🤖 Confluence Test Agent — Starting Pipeline');
-  console.log(`  Skip fetch:     ${skipFetch}`);
+  banner('🤖 Test Agent — Starting Pipeline');
+  console.log(`  Environment:    ${(process.env.TARGET_ENVIRONMENT || 'Stage').trim()}`);
   console.log(`  Skip generate:  ${skipGenerate}`);
   console.log(`  Update steps:   ${updateSteps}  ${updateSteps ? '' : '(existing step files will be preserved)'}`);
   console.log(`  Report only:    ${reportOnly}`);
@@ -359,15 +254,6 @@ async function orchestrate() {
 
   try {
     if (!reportOnly) {
-      if (!skipFetch) {
-        await stepFetchData();
-        await stepFetchFeatures();
-      } else {
-        console.log('⏭  Skipping fetch (--skip-fetch)');
-        // Still resolve the active environment so the report upload targets the
-        // correct "<env> Report" column (e.g. "Dev Report").
-        await ensureEnvironmentResolved();
-      }
       if (skipGenerate) {
         console.log('⏭  Skipping step generation (--skip-generate)');
       } else {

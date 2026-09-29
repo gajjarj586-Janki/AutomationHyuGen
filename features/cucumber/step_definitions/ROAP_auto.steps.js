@@ -80,12 +80,14 @@ Given('I navigate to the ROAP login page', async function () {
 });
 
 When('I enter username and password from test data', async function () {
-  // Read username/password from the "Driveaway Price - Test Data" sheet
-  // loaded by the Background step.
+  // Credentials are intentionally NOT in localTestData.js (never commit
+  // secrets to git) — read from .env, falling back to the "Driveaway Price -
+  // Test Data" sheet only for any non-secret override left there.
   _ensureDriveawayData(this);
   const row = (this.driveawayPriceData || [])[0] || {};
-  const username = (row.username || row.Username || row['user name'] || row.email || row.Email || '').toString().trim();
-  const password = (row.password || row.Password || row.pass || '').toString().trim();
+  const username = (process.env.ROAP_USERNAME || row.username || row.Username || row['user name'] || row.email || row.Email || '').toString().trim();
+  const password = (process.env.ROAP_PASSWORD || row.password || row.Password || row.pass || '').toString().trim();
+  assert.ok(username && password, 'ROAP_USERNAME / ROAP_PASSWORD must be set in .env');
   await _fillRoapCredentials(this.page, username, password);
 });
 
@@ -1256,10 +1258,14 @@ Given('I open the ROAP URL from test data', async function () {
 });
 
 When('I login using the username and password from test data', async function () {
+  // Credentials come from .env (ROAP_USERNAME/ROAP_PASSWORD) — never committed
+  // to git via localTestData.js. The sheet fields remain as a fallback for any
+  // non-secret override.
   _ensureDriveawayData(this);
   const row = (this.driveawayPriceData || [])[0] || {};
-  const username = (row.username || row.Username || row.email || row.Email || '').toString().trim();
-  const password = (row.password || row.Password || row.pass || '').toString().trim();
+  const username = (process.env.ROAP_USERNAME || row.username || row.Username || row.email || row.Email || '').toString().trim();
+  const password = (process.env.ROAP_PASSWORD || row.password || row.Password || row.pass || '').toString().trim();
+  assert.ok(username && password, 'ROAP_USERNAME / ROAP_PASSWORD must be set in .env');
   await _fillRoapCredentials(this.page, username, password);
   const btn = this.page.getByRole('button', { name: /log ?in|sign ?in|submit/i }).first();
   if (await btn.count()) await btn.click().catch(() => {});

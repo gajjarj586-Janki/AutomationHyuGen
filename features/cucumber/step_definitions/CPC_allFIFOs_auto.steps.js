@@ -600,7 +600,26 @@ Then('the CAD submission is successful', async function () {
   await this.page.waitForTimeout(3000);
   // Check inside the active modal for success text (same pattern as BATD "All done!")
   const _header = this._activeModalHeader || 'Contact a dealer';
-  const modal = this.page.locator('.modal-wrapper').filter({ has: this.page.locator(`.modal-header:has-text("${_header}")`) }).first();
+  // On FAD, multiple `.modal-wrapper` elements can share the same header text —
+  // only one is actually active (opacity > 0.5); the rest are stale/hidden
+  // duplicates still holding their pristine unfilled markup. A plain header-text
+  // `.filter().first()` can silently resolve to one of those duplicates instead
+  // of the real one (same pitfall the Model-selection step above already guards
+  // against), which then reads back the unsubmitted form text and reports a
+  // false "submission not confirmed" failure. Resolve by opacity instead.
+  async function _resolveActiveModal(page, header) {
+    const idx = await page.evaluate((h) => {
+      const wrappers = Array.from(document.querySelectorAll('.modal-wrapper'));
+      return wrappers.findIndex(el => {
+        const hd = el.querySelector('.modal-header');
+        return hd && hd.textContent.includes(h) && parseFloat(window.getComputedStyle(el).opacity) > 0.5;
+      });
+    }, header);
+    return idx >= 0
+      ? page.locator('.modal-wrapper').nth(idx)
+      : page.locator('.modal-wrapper').filter({ has: page.locator(`.modal-header:has-text("${header}")`) }).first();
+  }
+  let modal = await _resolveActiveModal(this.page, _header);
 
   // Wait for "processing" spinner to clear (up to 20s) — same as BATD success step
   await this.page.waitForFunction(([header]) => {
@@ -637,6 +656,10 @@ Then('the CAD submission is successful', async function () {
       const wrappers = Array.from(document.querySelectorAll('.modal-wrapper'));
       return wrappers.some(el => parseFloat(window.getComputedStyle(el).opacity) > 0.5);
     }).catch(() => true);
+    // Re-resolve each iteration — which wrapper is the active one (or whether
+    // the header text itself changed, e.g. to "Thank you") can shift as the
+    // page re-renders after submit.
+    modal = await _resolveActiveModal(this.page, _header);
 
     // Only genuinely visible text counts. The modal keeps every wizard step mounted
     // in the DOM at once, so `textContent()` picks up mounted-but-hidden panels too
@@ -763,13 +786,15 @@ When('the user selects Model from test data', async function () {
     'select[name*="model" i]',
     'select[id*="model" i]',
   ].join(', ')).first();
-  // Wait for the model select to actually exist + be populated (Vue lazy-loads options)
+  // Wait for the model select to actually exist + be populated (Vue lazy-loads options).
+  // Timeout raised from 10s — under `parallel: 3` this AJAX load can take noticeably
+  // longer while 3 browsers are contending for the stage site at once.
   await this.page.waitForFunction(() => {
     const sel = document.querySelector('#test-drive-modal-model-pcm2, #cad-modal-model-pcm2, #cad-page-model, select[name="ModelOfinterest__c"]');
     return sel && sel.options && sel.options.length > 1;
-  }, null, { timeout: 10000 }).catch(() => {});
+  }, null, { timeout: 25000 }).catch(() => {});
   if ((await _mdd.count()) > 0) {
-    await _mdd.waitFor({ state: 'visible', timeout: 8000 }).catch(() => {});
+    await _mdd.waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
     await _mdd.scrollIntoViewIfNeeded().catch(() => {});
     if (_model) {
       await _mdd.selectOption({ label: _model }).catch(async () => {
@@ -797,13 +822,14 @@ When('the user selects Model from test data', async function () {
     'select[id*="fuel" i]',
   ].join(', ')).first();
   const _pt = (_d['Powertrain'] || _d['Fuel Type'] || _d['Energy Type'] || _d['FuelType'] || '').toString();
-  // Wait for powertrain options to populate (Vue: appears 2-4s after model selection, slower in headed mode)
-  const _ptVis = await _pdd.waitFor({ state: 'visible', timeout: 10000 }).then(() => true).catch(() => false);
+  // Wait for powertrain options to populate (Vue: appears 2-4s after model selection, slower
+  // under `parallel: 3` load — timeouts raised from 10s/8s to tolerate contention)
+  const _ptVis = await _pdd.waitFor({ state: 'visible', timeout: 20000 }).then(() => true).catch(() => false);
   if (_ptVis) {
     await this.page.waitForFunction(() => {
       const sel = document.querySelector('#cad-page-energy-type, #test-drive-modal-energy-type-pcm2, select[name="FuelType__c"]');
       return sel && sel.options && sel.options.length > 1;
-    }, null, { timeout: 8000 }).catch(() => {});
+    }, null, { timeout: 20000 }).catch(() => {});
     await _pdd.scrollIntoViewIfNeeded().catch(() => {});
     if (_pt) {
       await _pdd.selectOption({ label: _pt }).catch(async () => {

@@ -121,6 +121,10 @@ export async function describeFieldIssues(modal) {
   for (const { selectors, label } of dropdowns) {
     const el = modal.locator(selectors).first();
     if ((await el.count().catch(() => 0)) === 0 || !(await el.isVisible().catch(() => false))) continue;
+    // Options are lazy-loaded (Vue), so a dropdown checked the instant it renders
+    // can look empty even though it fills in shortly after — give it a chance
+    // to populate before concluding it's genuinely stuck empty.
+    await el.locator('option').nth(1).waitFor({ state: 'attached', timeout: 5000 }).catch(() => {});
     const options = (await el.locator('option').allTextContents().catch(() => [])).map(o => o.trim()).filter(Boolean);
     const selectable = options.filter(o => !/^select|^please choose|^choose|^--/i.test(o));
     if (selectable.length === 0) {

@@ -148,6 +148,28 @@ function findLatestPayloadJson(scenarioName, featureName) {
   return null;
 }
 
+// Wall-clock time Cucumber took for the run that produced the results file
+// (written by agentOrchestrator.js — distinct from the fetch/upload steps
+// around it, so this reflects just "how long did the tests take").
+function loadTestRunDuration() {
+  try {
+    const p = path.resolve('.cache', 'lastTestRunDuration.json');
+    if (fs.existsSync(p)) {
+      const data = JSON.parse(fs.readFileSync(p, 'utf-8'));
+      if (typeof data.durationMs === 'number') return data.durationMs;
+    }
+  } catch { /* ignore — report just omits the duration */ }
+  return null;
+}
+
+function formatDuration(ms) {
+  if (!ms || ms <= 0) return '';
+  const totalSec = Math.round(ms / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
+
 function safeJsonParse(value, fallback) {
   try {
     return JSON.parse(value);
@@ -434,8 +456,9 @@ function computeStats(cases) {
 }
 
 // ─── HTML Builder ─────────────────────────────────────────────
-function buildHTML(cases, stats) {
+function buildHTML(cases, stats, durationMs) {
   const now = new Date();
+  const durationLabel = formatDuration(durationMs);
   const dateStr = now.toLocaleDateString('en-AU', { day: '2-digit', month: '2-digit', year: 'numeric' });
   const timeStr = now.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
@@ -562,6 +585,8 @@ function buildHTML(cases, stats) {
   .card-fail  { background: #FFC7CE; color: #9C0006; }
   .card-skip  { background: #FFF3CD; color: #856404; }
   .card-rate  { background: #EDE7F6; color: #4A148C; }
+  .card-time  { background: #E1F5FE; color: #01579B; }
+  .card-time .value { font-size: 20px; }
 
   /* ── Table ── */
   table { width: 100%; border-collapse: collapse; margin-top: 12px; }
@@ -587,6 +612,7 @@ function buildHTML(cases, stats) {
     <div><strong>Time:</strong> ${timeStr}</div>
     <div><strong>Environment:</strong> ${envName || 'N/A'}</div>
     ${envBaseUrl ? `<div><strong>Base URL:</strong> ${envBaseUrl}</div>` : ''}
+    ${durationLabel ? `<div><strong>Total Run Time:</strong> ${durationLabel}</div>` : ''}
     <div><strong>Source:</strong> Confluence (AI Agent)</div>
   </div>
 </div>
@@ -597,6 +623,7 @@ function buildHTML(cases, stats) {
   <div class="card card-fail"><div class="value">${stats.fail}</div><div class="label">Failed</div></div>
   <div class="card card-skip"><div class="value">${stats.skipped}</div><div class="label">Skipped</div></div>
   <div class="card card-rate"><div class="value">${stats.passRate}%</div><div class="label">Pass Rate</div></div>
+  ${durationLabel ? `<div class="card card-time"><div class="value">${durationLabel}</div><div class="label">Total Run Time</div></div>` : ''}
 </div>
 
 <div class="legend">
@@ -638,7 +665,7 @@ async function generatePDF() {
 
   console.log(`📊 Total: ${stats.total} | Pass: ${stats.pass} | Fail: ${stats.fail} | Skipped: ${stats.skipped} | Rate: ${stats.passRate}%`);
 
-  const html = buildHTML(cases, stats);
+  const html = buildHTML(cases, stats, loadTestRunDuration());
 
   // Ensure output dir exists
   if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -697,7 +724,7 @@ export async function generatePDFForFeature(jsonPath, featureFilename) {
 
   const cases = flattenResults(featureData);
   const stats = computeStats(cases);
-  const html = buildHTML(cases, stats);
+  const html = buildHTML(cases, stats, loadTestRunDuration());
 
   if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 

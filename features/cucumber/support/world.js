@@ -1,14 +1,13 @@
 /**
- * Cucumber World — Confluence-Driven Playwright Integration
- * Sets up browser/page for each scenario with test data from Confluence.
+ * Cucumber World — Playwright Integration
+ * Sets up browser/page for each scenario with test data from the local,
+ * git-tracked features/cucumber/test-data/localTestData.js (no Confluence
+ * fetch at test-run time — see that file's header for how to refresh it).
  */
 import { setWorldConstructor, Before, After, setDefaultTimeout } from '@cucumber/cucumber';
 import { chromium } from 'playwright';
 import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import ConfluenceReader from '../../../utils/confluenceReader.js';
-import config from '../../../utils/confluenceConfig.js';
+import localTestData from '../test-data/localTestData.js';
 import { findByHint, autoHeal, buildFieldSelectors, buildButtonSelectors, buildSelectSelectors, buildCheckboxSelectors } from '../../../utils/autoHealLocator.js';
 
 setDefaultTimeout(180000);
@@ -513,23 +512,6 @@ class CucumberWorld {
 
 setWorldConstructor(CucumberWorld);
 
-/**
- * Load the active environment configuration written by the orchestrator.
- * Falls back to Confluence API + static config if cache is unavailable.
- */
-function loadActiveEnvironment() {
-  try {
-    const cachePath = path.join(
-      path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '.cache', 'activeEnvironment.json'
-    );
-    if (fs.existsSync(cachePath)) {
-      const data = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
-      return data;
-    }
-  } catch { /* ignore */ }
-  return null;
-}
-
 Before(async function () {
   this._scenarioStartTime = Date.now();
 
@@ -690,39 +672,24 @@ Before(async function () {
   // ── Resolve Active Environment ─────────────────────────────
   // Priority: cached activeEnvironment.json (written by orchestrator Step 1.5)
   //   → falls back to Confluence API → static config
-  const envCache = loadActiveEnvironment();
-
-  // Load test data from Confluence
+  // Test data and environment URLs come from the local, git-tracked
+  // localTestData.js — nothing is fetched from Confluence at test-run time.
+  // Which environment (Dev / Dev1 / Stage / Production) is active is decided
+  // solely by TARGET_ENVIRONMENT in .env; that name is also the column used
+  // to resolve each page's URL out of the "Environment URLs" table below.
   try {
-    const allData = await ConfluenceReader.readAllSheets();
+    const allData = localTestData;
     this.allConfluenceData = allData;
 
-    // Determine environment: from cache (orchestrator resolved it from
-    // Environment Configuration Status=Yes) → .env → default Production
-    if (envCache) {
-      this.environmentName = envCache.activeEnvironment;
-      this.pageUrls = envCache.pageUrls || {};
-      console.log(`📋 Environment (from Confluence config): ${this.environmentName}`);
-    } else {
-      // No cache — resolve from Confluence directly
-      const envConfig = allData['Environment Configuration'] || [];
-      const activeRow = envConfig.find(r =>
-        r.Status && r.Status.toLowerCase().trim() === 'yes'
-      );
-      this.environmentName = activeRow
-        ? (activeRow.Environment || activeRow.TestName)
-        : config.targetEnvironment;
-
-      // Build page URL map
-      const envUrls = allData['Environment URLs'] || [];
-      this.pageUrls = {};
-      for (const row of envUrls) {
-        if (row.Page) {
-          this.pageUrls[row.Page.toLowerCase()] = row[this.environmentName] || row['Production'] || '';
-        }
+    this.environmentName = (process.env.TARGET_ENVIRONMENT || 'Stage').trim();
+    const envUrls = allData['Environment URLs'] || [];
+    this.pageUrls = {};
+    for (const row of envUrls) {
+      if (row.Page) {
+        this.pageUrls[row.Page.toLowerCase()] = row[this.environmentName] || row['Production'] || '';
       }
-      console.log(`📋 Environment (resolved live from Confluence): ${this.environmentName}`);
     }
+    console.log(`📋 Environment (from .env TARGET_ENVIRONMENT): ${this.environmentName}`);
 
     // Contact Us URL — from resolved page URLs
     this.contactUsUrl = this.pageUrls['contact us']
@@ -757,10 +724,10 @@ Before(async function () {
     console.log(`📋 Test Drive test data rows: ${this.testDriveData.length}`);
     console.log(`📋 PIM MLP test data rows: ${this.pimTestData.length}`);
   } catch (err) {
-    console.error(`⚠️  Failed to load Confluence data: ${err.message}`);
+    console.error(`⚠️  Failed to load local test data: ${err.message}`);
     console.log('   Falling back to Production defaults');
-    this.environmentName = envCache?.activeEnvironment || config.targetEnvironment;
-    this.pageUrls = envCache?.pageUrls || {};
+    this.environmentName = (process.env.TARGET_ENVIRONMENT || 'Production').trim();
+    this.pageUrls = this.pageUrls || {};
     this.contactUsUrl = this.pageUrls['contact us'] || 'https://www.hyundai.com/au/en/customer-care/contact-us';
     this.contactDealerUrl = this.pageUrls['contact a dealer'] || 'https://www.hyundai.com/au/en/contact-a-dealer';
     this.testData = [];

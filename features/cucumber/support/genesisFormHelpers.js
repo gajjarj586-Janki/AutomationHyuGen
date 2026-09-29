@@ -168,7 +168,9 @@ const DEFAULT_GENESIS_DATA = {
     'Contact Number': '0431667796',
     'VIN': 'KMHLT4AG1NU000001',
     'Registration Number': 'ABC123',
-    'Preferred Date': '2026-08-15',
+    // Value here is a placeholder only — handleSpecialGenesisField() always
+    // computes an actual date 6 weeks from today instead of using this.
+    'Preferred Date': '__dynamic__',
   },
   subscribe: {
     'Contact Number': '0431667796',
@@ -404,6 +406,26 @@ async function clickBestTextMatch(page, text, options = {}) {
 
 async function handleSpecialGenesisField(page, fieldName, value, scope = page) {
   const normalizedField = normalizeFieldName(fieldName);
+
+  if (normalizedField === 'preferred date') {
+    // The Book a Service form requires a date at least 4 weeks from today —
+    // any hardcoded calendar date in test data/defaults inevitably goes stale
+    // and starts failing that validation. Compute 6 weeks out instead, every
+    // run, regardless of what literal value was supplied.
+    const target = await firstVisibleLocator(scope, FIELD_SELECTOR_MAP['preferred date']);
+    if (!target) return false;
+    const d = new Date();
+    d.setDate(d.getDate() + 42);
+    const iso = d.toISOString().slice(0, 10); // YYYY-MM-DD — what input[type=date] expects
+    await target.fill(iso).catch(async () => {
+      await target.evaluate((el, v) => {
+        el.value = v;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }, iso);
+    });
+    return true;
+  }
 
   if (normalizedField === 'vehicle selection') {
     const formScope = '.cp-contact-us__form-fields';

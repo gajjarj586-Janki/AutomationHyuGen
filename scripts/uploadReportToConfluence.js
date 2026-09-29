@@ -30,6 +30,23 @@ function authHeader() {
   return 'Basic ' + Buffer.from(pair).toString('base64');
 }
 
+// Confluence calls occasionally fail with a plain connection-level error
+// (undici "fetch failed") rather than an HTTP error response — seen in
+// practice on this network. Retry those a couple of times before giving up;
+// real HTTP error statuses (4xx/5xx) still come back as a normal response
+// and are handled by the caller, not retried here.
+async function fetchWithRetry(url, options, retries = 2, delayMs = 2000) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fetch(url, options);
+    } catch (err) {
+      if (attempt >= retries) throw err;
+      console.log(`⚠️  Network error calling Confluence (${err.message}) — retrying (${attempt + 1}/${retries})…`);
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+}
+
 // ─── Step 1: Upload PDF as Attachment ────────────────────────
 
 async function uploadAttachment(pdfPath) {
@@ -55,7 +72,7 @@ async function uploadAttachment(pdfPath) {
   const attachUrl = `${baseUrl}/rest/api/content/${pageId}/child/attachment`;
 
   // Check if attachment with the same name already exists; if so, update it
-  const listRes = await fetch(`${attachUrl}?filename=${encodeURIComponent(filename)}`, {
+  const listRes = await fetchWithRetry(`${attachUrl}?filename=${encodeURIComponent(filename)}`, {
     headers: {
       Authorization: authHeader(),
       Accept: 'application/json',
@@ -75,7 +92,7 @@ async function uploadAttachment(pdfPath) {
     console.log(`📎 Uploading new attachment: ${filename}`);
   }
 
-  const uploadRes = await fetch(uploadUrl, {
+  const uploadRes = await fetchWithRetry(uploadUrl, {
     method,
     headers: {
       Authorization: authHeader(),
@@ -102,7 +119,7 @@ async function uploadAttachment(pdfPath) {
 
 async function updateReportColumn(pdfFilename, testedFeatureFiles, status) {
   const getUrl = `${baseUrl}/rest/api/content/${pageId}?expand=body.storage,version`;
-  const getRes = await fetch(getUrl, {
+  const getRes = await fetchWithRetry(getUrl, {
     headers: { Authorization: authHeader(), Accept: 'application/json' },
   });
   if (!getRes.ok) {
@@ -220,7 +237,7 @@ async function updateReportColumn(pdfFilename, testedFeatureFiles, status) {
   }
 
   // Push the updated page back to Confluence
-  const updateRes = await fetch(`${baseUrl}/rest/api/content/${pageId}`, {
+  const updateRes = await fetchWithRetry(`${baseUrl}/rest/api/content/${pageId}`, {
     method: 'PUT',
     headers: {
       Authorization: authHeader(),

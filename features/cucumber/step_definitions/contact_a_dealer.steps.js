@@ -96,7 +96,11 @@ async function clickSubmit(page) {
     await page.waitForTimeout(200);
     try { await btn.evaluate(el => el.click()); } catch { await btn.click({ force: true }).catch(() => {}); }
   }
-  await page.waitForTimeout(5000);
+  // Try networkidle first (usually much faster than the old unconditional 5s
+  // sleep) and only fall back to a fixed wait if the network never settles.
+  await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(async () => {
+    await page.waitForTimeout(2000);
+  });
 }
 
 async function waitForSuccessMessage(page) {
