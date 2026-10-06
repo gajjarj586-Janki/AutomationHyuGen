@@ -21,7 +21,7 @@ export default {
       "Environment": "Dev",
       "URL": "https://dev.hyundai.com.au/au/en",
       "RequiresAuth": "No",
-      "Status": "Yes"
+      "Status": "No"
     },
     {
       "TestName": "Dev1",
@@ -35,7 +35,7 @@ export default {
       "Environment": "Stage",
       "URL": "https://stage.hyundai.com.au/au/en",
       "RequiresAuth": "No",
-      "Status": "No"
+      "Status": "Yes"
     },
     {
       "TestName": "Production",

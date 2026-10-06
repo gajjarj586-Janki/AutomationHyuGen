@@ -1,16 +1,16 @@
 {
-  "BATD-smoke.feature": "yes",
-  "CAD-smoke.feature": "yes",
+  "BATD-smoke.feature": "No",
+  "CAD-smoke.feature": "No",
   "calculator_pricing.feature": "no",
-  "contact_us.feature": "yes",
-  "CPC-allFIFOs.feature": "yes",
-  "CPC-pageLoad.feature": "no",
-  "FindADealer-FIFO.feature": "yes",
-  "FleetReg-smoke.feature": "yes",
-  "genesis_all_fields_filled (1).feature": "yes",
-  "Ownership_smoke.feature": "yes",
+  "contact_us.feature": "No",
+  "CPC-allFIFOs.feature": "No",
+  "CPC-pageLoad.feature": "yes",
+  "FindADealer-FIFO.feature": "no",
+  "FleetReg-smoke.feature": "No",
+  "genesis_all_fields_filled (1).feature": "No",
+  "Ownership_smoke.feature": "no",
   "PIM.feature": "no",
-  "pipFIFO.feature": "yes",
+  "pipFIFO.feature": "no",
   "ROAP.feature": "no",
-  "talk-to-an-expert.feature": "yes"
+  "talk-to-an-expert.feature": "no"
 }

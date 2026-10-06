@@ -28,9 +28,11 @@
     "fix:mcp": "node scripts/mcpAutoFixer.js",
     "fix:mcp:smoke": "node scripts/mcpAutoFixer.js --tags @smoke",
     "fix:mcp:once": "node scripts/mcpAutoFixer.js --no-rerun",
-    "agent:mcp-fix": "node scripts/agentOrchestrator.js --mcp-fix"
+    "agent:mcp-fix": "node scripts/agentOrchestrator.js --mcp-fix",
+    "claude:ask": "node scripts/callClaude.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.70.1",
     "@cucumber/cucumber": "^12.7.0",
     "@playwright/test": "^1.61.1",
     "cheerio": "^1.0.0",

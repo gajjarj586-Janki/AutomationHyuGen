@@ -170,6 +170,14 @@ function formatDuration(ms) {
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
 
+// Cucumber JSON reports step durations in nanoseconds, not milliseconds.
+function formatDurationNs(ns) {
+  if (!ns || ns <= 0) return '';
+  const ms = ns / 1e6;
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return formatDuration(ms);
+}
+
 function safeJsonParse(value, fallback) {
   try {
     return JSON.parse(value);
@@ -551,6 +559,7 @@ function buildHTML(cases, stats, durationMs) {
         <td>${escapeHtml(c.scenario)}</td>
         <td style="font-size:9px;max-width:200px;word-break:break-all;">${c.testUrl ? `<a href="${escapeHtml(c.testUrl)}" style="color:#1F3864;text-decoration:underline;">${escapeHtml(c.testUrl)}</a>` : '<span style="color:#999;">—</span>'}</td>
         <td style="text-align:center;">${statusBadge(c.status)}</td>
+        <td style="font-size:9px;white-space:nowrap;">${escapeHtml(formatDurationNs(c.duration))}</td>
         <td style="font-size:9px;">${renderScreenshotCell(c)}</td>
         <td style="font-size:9px;">${renderPayloadCell(c)}</td>
         <td style="font-size:9px;max-width:250px;">
@@ -640,13 +649,14 @@ function buildHTML(cases, stats, durationMs) {
       <th style="width:160px;">Scenario</th>
       <th style="width:180px;">Test URL</th>
       <th style="width:70px;text-align:center;">Status</th>
+      <th style="width:70px;">Duration</th>
       <th style="width:340px;">Screenshot</th>
       <th style="width:360px;">API Payload</th>
       <th style="width:220px;">Summary</th>
     </tr>
   </thead>
   <tbody>
-    ${rows || '<tr><td colspan="7" style="text-align:center;padding:20px;">No test results found.</td></tr>'}
+    ${rows || '<tr><td colspan="8" style="text-align:center;padding:20px;">No test results found.</td></tr>'}
   </tbody>
 </table>
 
