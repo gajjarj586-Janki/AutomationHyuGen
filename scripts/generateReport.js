@@ -148,18 +148,14 @@ function findLatestPayloadJson(scenarioName, featureName) {
   return null;
 }
 
-// Wall-clock time Cucumber took for the run that produced the results file
-// (written by agentOrchestrator.js — distinct from the fetch/upload steps
-// around it, so this reflects just "how long did the tests take").
-function loadTestRunDuration() {
-  try {
-    const p = path.resolve('.cache', 'lastTestRunDuration.json');
-    if (fs.existsSync(p)) {
-      const data = JSON.parse(fs.readFileSync(p, 'utf-8'));
-      if (typeof data.durationMs === 'number') return data.durationMs;
-    }
-  } catch { /* ignore — report just omits the duration */ }
-  return null;
+// Total run time for a report = sum of its own scenarios' durations, not the
+// whole pipeline's — otherwise every per-feature PDF from a multi-feature run
+// would show the same (misleadingly large) number regardless of how long
+// that feature's own tests actually took. Scenarios run sequentially
+// (parallel: 1), so this sum closely matches that report's real wall time.
+function sumCaseDurationsMs(cases) {
+  const totalNs = cases.reduce((sum, c) => sum + (c.duration || 0), 0);
+  return totalNs / 1e6;
 }
 
 function formatDuration(ms) {
@@ -675,7 +671,7 @@ async function generatePDF() {
 
   console.log(`📊 Total: ${stats.total} | Pass: ${stats.pass} | Fail: ${stats.fail} | Skipped: ${stats.skipped} | Rate: ${stats.passRate}%`);
 
-  const html = buildHTML(cases, stats, loadTestRunDuration());
+  const html = buildHTML(cases, stats, sumCaseDurationsMs(cases));
 
   // Ensure output dir exists
   if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -734,7 +730,7 @@ export async function generatePDFForFeature(jsonPath, featureFilename) {
 
   const cases = flattenResults(featureData);
   const stats = computeStats(cases);
-  const html = buildHTML(cases, stats, loadTestRunDuration());
+  const html = buildHTML(cases, stats, sumCaseDurationsMs(cases));
 
   if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 

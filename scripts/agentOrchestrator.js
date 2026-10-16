@@ -90,21 +90,7 @@ function stepRunTests(tags) {
   // The deprecation warning is harmless — the file is still written correctly.
   const formatArg = '--format json:test-results/cucumber-report.json';
   const cmd = `npx cucumber-js --config cucumber.js ${formatArg}${tagArg}`;
-  const testRunStart = Date.now();
   const ok = run(cmd, `Cucumber${tags ? ` (${tags})` : ''}`);
-  const testRunDurationMs = Date.now() - testRunStart;
-
-  // Persist the actual wall-clock time Cucumber took (distinct from the
-  // pipeline's overall time, which also includes the Confluence fetch/upload
-  // steps) so the PDF report can show how long the tests themselves took.
-  try {
-    const cacheDir = path.join(ROOT, '.cache');
-    if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(cacheDir, 'lastTestRunDuration.json'),
-      JSON.stringify({ durationMs: testRunDurationMs, finishedAt: new Date().toISOString() }),
-    );
-  } catch { /* non-critical — report just omits the duration */ }
 
   if (fs.existsSync(RESULTS_JSON)) {
     const raw_content = fs.readFileSync(RESULTS_JSON, 'utf-8').trim();
