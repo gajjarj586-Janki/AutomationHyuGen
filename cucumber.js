@@ -75,6 +75,14 @@ export default {
   ],
   publishQuiet: true,
   timeout: 120000,
+  // Re-run a scenario once if it fails before recording a final result — the
+  // JSON report (and everything built from it: PDF/HTML reports, Confluence
+  // upload) only ever sees the LAST attempt, so a scenario that fails once
+  // then passes on retry shows up as a single PASS, not two rows. Only
+  // genuinely "failed" (assertion/runtime) scenarios are retried — a missing
+  // step definition (undefined/pending/ambiguous) fails the same way every
+  // time, so Cucumber doesn't waste a retry on those.
+  retry: 1,
   // Each scenario launches its own isolated browser/context/page (world.js
   // Before hook) with no shared state, so scenarios are safe to run concurrently
   // in principle. In practice, BOTH parallel:3 and parallel:2 caused the same

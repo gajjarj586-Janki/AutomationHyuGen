@@ -67,7 +67,7 @@ Given('user enters a valid VIN', async function () {
   const _vin = (_d['VIN'] || _d['Vin'] || _d['vin'] || '').toString();
   const _vf = this.page.locator('.recall-vin-number, .recall-input input, input[name*="vin" i], input[id*="vin" i], input[placeholder*="vin" i]').first();
   if ((await _vf.count()) > 0) {
-    await _vf.scrollIntoViewIfNeeded().catch(() => {});
+    await _vf.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     await _vf.clear().catch(() => {});
     if (_vin) {
       await _vf.fill(_vin);
@@ -271,7 +271,7 @@ Then('the user selects a State', async function () {
   // Ownership form uses #fleet-registration-page-state (name="Address__StateCode__s")
   const _dd = this.page.locator('#fleet-registration-page-state, select[name="Address__StateCode__s"], select[name*="state" i], select[id*="state" i]').first();
   if ((await _dd.count()) > 0) {
-    await _dd.scrollIntoViewIfNeeded().catch(() => {});
+    await _dd.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     if (_want) {
       await _dd.selectOption({ label: _want }).catch(async () => {
         const _opts = await _dd.locator('option').allTextContents();
@@ -597,7 +597,7 @@ When('the user selects State from the dropdown', async function (table) {
   const _want = (_rows['State'] || _rows['Value'] || '').toString();
   const _dd = this.page.locator('select[name*="state" i], select[id*="state" i], select[aria-label*="state" i], select[name*="province" i]').first();
   if ((await _dd.count()) > 0) {
-    await _dd.scrollIntoViewIfNeeded().catch(() => {});
+    await _dd.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     if (_want) {
       await _dd.selectOption({ label: _want }).catch(async () => {
         const _opts = await _dd.locator('option').allTextContents();

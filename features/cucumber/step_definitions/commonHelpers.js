@@ -209,7 +209,7 @@ export async function selectConsumerVariant(page, variant) {
     }).catch(() => []);
     throw new Error(`Could not find variant "${variant}" on the consumer calculator. Visible candidates: ${JSON.stringify(samples)}`);
   }
-  await target.scrollIntoViewIfNeeded().catch(() => {});
+  await target.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
   await Promise.all([
     page.waitForResponse(r => /variantpricecalc/i.test(r.url()) && r.ok(), { timeout: 30000 }).catch(() => null),
     target.click({ timeout: 8000 }),
@@ -257,7 +257,7 @@ export async function selectConsumerOption(page, label) {
     }).catch(() => []);
     throw new Error(`Could not find consumer option "${label}". Visible candidates: ${JSON.stringify(samples)}`);
   }
-  await target.scrollIntoViewIfNeeded().catch(() => {});
+  await target.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
   await Promise.all([
     page.waitForResponse(r => /variantpricecalc/i.test(r.url()) && r.ok(), { timeout: 10000 }).catch(() => null),
     target.click({ timeout: 8000 }),

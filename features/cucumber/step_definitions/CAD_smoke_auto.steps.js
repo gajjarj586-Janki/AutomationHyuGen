@@ -66,7 +66,7 @@ Given('the user has selected dealer', async function () {
     console.log('⚠️ Set location button not found — skipping');
     return;
   }
-  await setLocBtn.scrollIntoViewIfNeeded().catch(() => {});
+  await setLocBtn.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
   await setLocBtn.click({ timeout: 5000 });
   await this.page.waitForTimeout(1500);
 
@@ -113,7 +113,7 @@ When('the user enters purchase intent', async function () {
   // DOM-mapped: "When are you likely to purchase?" → #cad-page-purchase-time
   const dropdown = this.page.locator('#cad-page-purchase-time').first();
   if ((await dropdown.count()) > 0) {
-    await dropdown.scrollIntoViewIfNeeded().catch(() => {});
+    await dropdown.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     if (purchaseTime) {
       await dropdown.selectOption({ label: purchaseTime }).catch(async () => {
         const opts = await dropdown.locator('option').allTextContents();
@@ -150,7 +150,7 @@ When('the user selects model and powertrain', async function () {
   // DOM-mapped: "Model*" → #cad-page-model
   const modelDropdown = this.page.locator('#cad-page-model').first();
   if ((await modelDropdown.count()) > 0) {
-    await modelDropdown.scrollIntoViewIfNeeded().catch(() => {});
+    await modelDropdown.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     if (model) {
       await modelDropdown.selectOption({ label: model }).catch(async () => {
         const opts = await modelDropdown.locator('option').allTextContents();
@@ -177,7 +177,7 @@ When('the user selects model and powertrain', async function () {
   const powertrainDropdown = this.page.locator('#cad-page-energy-type, select[name="FuelType__c"], select[id*="energy" i], select[id*="powertrain" i], select[id*="fuel" i]').first();
   const ptVisible = await powertrainDropdown.waitFor({ state: 'visible', timeout: 5000 }).then(() => true).catch(() => false);
   if (ptVisible) {
-    await powertrainDropdown.scrollIntoViewIfNeeded().catch(() => {});
+    await powertrainDropdown.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     if (powertrain) {
       await powertrainDropdown.selectOption({ label: powertrain }).catch(async () => {
         const opts = await powertrainDropdown.locator('option').allTextContents();
@@ -209,7 +209,7 @@ When('the user accepts the marketing authorisation', async function () {
   // Wait for it to be present before interacting
   await checkbox.waitFor({ state: 'attached', timeout: 8000 }).catch(() => {});
   if ((await checkbox.count()) > 0) {
-    await checkbox.scrollIntoViewIfNeeded().catch(() => {});
+    await checkbox.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     await this.page.waitForTimeout(400);
     const isChecked = await checkbox.isChecked().catch(() => false);
     if (!isChecked) {
@@ -479,7 +479,7 @@ When('the user enters a invalid email address', async function () {
     '#cad-page-email-address, #email, input[name="email"], input[type="email"]'
   ).first();
   if ((await emailField.count()) > 0 && (await emailField.isVisible().catch(() => false))) {
-    await emailField.scrollIntoViewIfNeeded().catch(() => {});
+    await emailField.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     await emailField.clear().catch(() => {});
     await emailField.fill('invalid-email-address');
     console.log('📋 Entered invalid email address');

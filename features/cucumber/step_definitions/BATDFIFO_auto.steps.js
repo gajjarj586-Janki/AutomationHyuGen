@@ -90,7 +90,7 @@ Given('user clicks on Book a test drive', async function () {
   ].join(', ')).first();
 
   await batdBtn.waitFor({ state: 'visible', timeout: 15000 });
-  await batdBtn.scrollIntoViewIfNeeded().catch(() => {});
+  await batdBtn.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
 
   // Extra wait for Vue to fully re-render after location modal dismissal
   await this.page.waitForTimeout(1000);
@@ -368,7 +368,7 @@ Given('the user clicks Next', async function () {
   }
 
   await nextBtn.waitFor({ state: 'visible', timeout: 10000 });
-  await nextBtn.scrollIntoViewIfNeeded().catch(() => {});
+  await nextBtn.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
   await nextBtn.click({ force: true }).catch(async () => {
     await nextBtn.evaluate(el => el.click());
   });
@@ -561,13 +561,13 @@ async function checkConsentByIndex(modal, page, zeroBasedIndex) {
       if (cbId) {
         const label = modal.locator(`label[for="${cbId}"]`).first();
         if (await label.count() > 0) {
-          await label.scrollIntoViewIfNeeded().catch(() => {});
+          await label.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
           await label.click({ force: true }).catch(() => label.evaluate(el => el.click()));
           clicked = true;
         }
       }
       if (!clicked) {
-        await cb.scrollIntoViewIfNeeded().catch(() => {});
+        await cb.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
         await cb.click({ force: true }).catch(() => cb.evaluate(el => el.click()));
       }
       await page.waitForTimeout(300);
@@ -598,7 +598,7 @@ Given('the user clicks Submit request', async function () {
     });
     const _nextEl = _nextHandle.asElement();
     if (_nextEl) {
-      await _nextEl.scrollIntoViewIfNeeded().catch(() => {});
+      await _nextEl.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
       await _nextEl.click({ force: true });
       console.log('✅ Clicked Next to reach Submit step');
       await this.page.waitForTimeout(1500);
@@ -637,7 +637,7 @@ Given('the user clicks Submit request', async function () {
   const _submitEl = _submitHandle?.asElement?.();
   let _clicked = false;
   if (_submitEl) {
-    await _submitEl.scrollIntoViewIfNeeded().catch(() => {});
+    await _submitEl.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     await _submitEl.click({ force: true });
     const _text = await _submitEl.evaluate(el => el.textContent.trim()).catch(() => 'Submit');
     console.log(`✅ Clicked Submit request via elementHandle: "${_text}"`);

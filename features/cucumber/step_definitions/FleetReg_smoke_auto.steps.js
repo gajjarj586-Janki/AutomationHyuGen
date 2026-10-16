@@ -84,7 +84,7 @@ When('the user enters a Title', async function () {
   const title = data['Title'] || data['Salutation'] || 'Mr';
   const select = this.page.locator('#fleet-registration-page-title, select[name*="title" i], select[name*="salutation" i]').first();
   if ((await select.count()) > 0) {
-    await select.scrollIntoViewIfNeeded().catch(() => {});
+    await select.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     const options = await select.locator('option').allTextContents();
     const match = options.find(o => o.trim().toLowerCase() === title.toLowerCase())
       || options.find(o => o.trim().toLowerCase().includes(title.toLowerCase()));
@@ -107,7 +107,7 @@ When('the user selects option on Person Submitting Form Same as Above', async fu
   const radioId = (val === 'no') ? 'no-need2ndContact' : 'need2ndContact';
   const radio = this.page.locator(`#${radioId}`).first();
   if ((await radio.count()) > 0) {
-    await radio.scrollIntoViewIfNeeded().catch(() => {});
+    await radio.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     // Click the associated label (more reliable than clicking the hidden radio directly)
     const label = this.page.locator(`label[for="${radioId}"]`).first();
     if ((await label.count()) > 0) {
@@ -127,7 +127,7 @@ When('the user selects Position in the pulldown', async function () {
   const position = data['Position'] || data['Job Title'] || '';
   const select = this.page.locator('#fleet-registration-page-position, select[name*="position" i], select[id*="position" i]').first();
   if ((await select.count()) > 0) {
-    await select.scrollIntoViewIfNeeded().catch(() => {});
+    await select.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     const options = await select.locator('option').allTextContents();
     const match = position
       ? (options.find(o => o.trim().toLowerCase().includes(position.toLowerCase())) || null)
@@ -148,7 +148,7 @@ When('the user inputs a valid ABN', async function () {
   const abn = String(data['ABN'] || data['Abn'] || '12345678901');
   const field = this.page.locator('#fleet-registration-page-abn, input[name*="abn" i], input[id*="abn" i]').first();
   if ((await field.count()) > 0) {
-    await field.scrollIntoViewIfNeeded().catch(() => {});
+    await field.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     await field.fill(abn);
     console.log(`📋 Entered ABN: ${abn}`);
   }
@@ -159,7 +159,7 @@ When('the user enters Company Name', async function () {
   const company = data['Company Name'] || data['Company'] || 'Test Company Pty Ltd';
   const field = this.page.locator('#fleet-registration-page-company-name, input[name*="company" i], input[id*="company" i]').first();
   if ((await field.count()) > 0) {
-    await field.scrollIntoViewIfNeeded().catch(() => {});
+    await field.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     await field.fill(company);
     console.log(`📋 Entered Company Name: ${company}`);
   }
@@ -170,7 +170,7 @@ When('the user selects a Purchase Category', async function () {
   const category = data['Purchase Category'] || data['Category'] || '';
   const select = this.page.locator('#fleet-registration-page-purchase-category, select[name*="purchase" i], select[id*="purchase" i], select[name*="category" i]').first();
   if ((await select.count()) > 0) {
-    await select.scrollIntoViewIfNeeded().catch(() => {});
+    await select.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     const options = await select.locator('option').allTextContents();
     const match = category
       ? (options.find(o => o.trim().toLowerCase().includes(category.toLowerCase())) || null)
@@ -191,7 +191,7 @@ When('the user selects an Industry', async function () {
   const industry = data['Industry'] || '';
   const select = this.page.locator('#fleet-registration-page-industry, select[name*="industry" i], select[id*="industry" i]').first();
   if ((await select.count()) > 0) {
-    await select.scrollIntoViewIfNeeded().catch(() => {});
+    await select.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     const options = await select.locator('option').allTextContents();
     const match = industry
       ? (options.find(o => o.trim().toLowerCase().includes(industry.toLowerCase())) || null)
@@ -213,7 +213,7 @@ When('the user enters an address', async function () {
   // Fleet uses #fleet-registration-page-address; Ownership uses #ownership-page-page-address
   const field = this.page.locator('#ownership-page-page-address, input[name="Address__Street__s"], #fleet-registration-page-address, input[name*="address" i]:not([type="email"]):not([id*="postcode" i]):not([id*="email" i])').first();
   if ((await field.count()) > 0) {
-    await field.scrollIntoViewIfNeeded().catch(() => {});
+    await field.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     await field.fill(address);
     console.log(`📋 Entered Address: ${address}`);
   }
@@ -224,7 +224,7 @@ When('the user enters a suburb', async function () {
   const suburb = data['Suburb'] || data['City'] || 'Sydney';
   const field = this.page.locator('#fleet-registration-page-suburb, input[name*="suburb" i], input[id*="suburb" i], input[name*="city" i]').first();
   if ((await field.count()) > 0) {
-    await field.scrollIntoViewIfNeeded().catch(() => {});
+    await field.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     await field.fill(suburb);
     console.log(`📋 Entered Suburb: ${suburb}`);
   }
@@ -236,7 +236,7 @@ When('the user enters a stage', async function () {
   const state = data['State'] || data['Stage'] || data['Territory'] || 'NSW';
   const select = this.page.locator('#fleet-registration-page-state, select[name*="state" i], select[id*="state" i]').first();
   if ((await select.count()) > 0) {
-    await select.scrollIntoViewIfNeeded().catch(() => {});
+    await select.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     const options = await select.locator('option').allTextContents();
     const match = options.find(o => o.trim().toUpperCase() === state.toUpperCase())
       || options.find(o => o.trim().toLowerCase().includes(state.toLowerCase()));
@@ -262,7 +262,7 @@ When('the user enters a Postcode', async function () {
   const postcode = String(data['Postcode'] || data['Post Code'] || '2000');
   const field = this.page.locator('#fleet-registration-page-postcode, input[name*="postcode" i], input[id*="postcode" i], input[name*="zip" i]').first();
   if ((await field.count()) > 0) {
-    await field.scrollIntoViewIfNeeded().catch(() => {});
+    await field.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     await field.fill(postcode);
     console.log(`📋 Entered Postcode: ${postcode}`);
   }
@@ -276,7 +276,7 @@ When('the user enters Fleet Size', async function () {
   // fill the wrong field.
   const field = this.page.locator('#fleet-registration-page-fleet-size, input[name="Fleet_Size__c"]').first();
   if ((await field.count()) > 0) {
-    await field.scrollIntoViewIfNeeded().catch(() => {});
+    await field.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     await field.fill(fleetSize);
     console.log(`📋 Entered Fleet Size: ${fleetSize}`);
   } else {
@@ -295,7 +295,7 @@ When('the user enters Vehicle Replacement Policy in months', async function () {
     'input[name*="month" i], input[id*="month" i], input[name*="replacement" i][name*="month" i]'
   ).first();
   if ((await field.count()) > 0) {
-    await field.scrollIntoViewIfNeeded().catch(() => {});
+    await field.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     await field.fill(months);
     console.log(`📋 Entered Vehicle Replacement Months: ${months}`);
   }
@@ -312,7 +312,7 @@ When('the user enters Vehicle Replacement Policy in kms', async function () {
     'input[name*="km" i], input[id*="km" i]'
   ).first();
   if ((await field.count()) > 0) {
-    await field.scrollIntoViewIfNeeded().catch(() => {});
+    await field.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     await field.fill(kms);
     console.log(`📋 Entered Vehicle Replacement Kms: ${kms}`);
   }
@@ -349,7 +349,7 @@ When('the user enters a phone number', async function () {
   // Fleet uses #fleet-registration-page-phone-number; Ownership uses #ownership-page-phone-number
   const field = this.page.locator('#ownership-page-phone-number, input[name="MobilePhone__c"], #fleet-registration-page-phone-number, input[name*="phone" i], input[id*="phone" i], input[type="tel"]').first();
   if ((await field.count()) > 0) {
-    await field.scrollIntoViewIfNeeded().catch(() => {});
+    await field.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     await field.fill(phone);
     console.log(`📋 Entered Phone: ${phone}`);
   }

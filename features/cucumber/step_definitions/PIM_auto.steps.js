@@ -223,7 +223,7 @@ async function clickModelTile(page, modelName) {
     await page.waitForTimeout(500);
     await label.waitFor({ state: 'visible', timeout: 10000 });
   }
-  await label.scrollIntoViewIfNeeded().catch(() => { });
+  await label.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => { });
 
   // Walk up to the nearest clickable tile container (v-card / v-sheet / a /
   // button / role=button). Fall back to clicking the label itself if no
@@ -288,7 +288,7 @@ async function selectPimVariant(page, variant) {
       `Could not find PIM variant "${variant}" in the Model Series table. Visible labels: ${JSON.stringify(samples)}`
     );
   }
-  await target.scrollIntoViewIfNeeded().catch(() => { });
+  await target.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => { });
   await target.click({ timeout: 8000 });
   await page.waitForLoadState('networkidle').catch(() => { });
 }
@@ -357,14 +357,14 @@ When(
             'button, a, [role="button"], [role="link"], .v-btn, svg, i'
           ).first();
           const target = (await actionable.count()) ? actionable : cell;
-          await target.scrollIntoViewIfNeeded().catch(() => { });
+          await target.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => { });
           await target.click({ timeout: 8000 });
           await page.waitForLoadState('networkidle').catch(() => { });
           console.log(`✅ Clicked "${label}" cell in Model Series row`);
           return;
         }
 
-        await target.scrollIntoViewIfNeeded().catch(() => { });
+        await target.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => { });
         await target.click({ timeout: 5000 });
         await page.waitForLoadState('networkidle').catch(() => { });
         console.log(`✅ Clicked: ${label}`);
@@ -879,7 +879,7 @@ async function _selectConsumerVariant(variant) {
         `Could not find variant "${variant}" on the consumer calculator. Visible candidates: ${JSON.stringify(samples)}`
       );
     }
-    await target.scrollIntoViewIfNeeded().catch(() => { });
+    await target.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => { });
 
     // Clear any earlier captured mlp so we know the value after selection
     // is genuinely for this variant.
@@ -945,7 +945,7 @@ async function _selectConsumerOption(label) {
       `Could not find consumer option "${label}". Visible candidates: ${JSON.stringify(samples)}`
     );
   }
-  await target.scrollIntoViewIfNeeded().catch(() => { });
+  await target.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => { });
   await Promise.all([
     page.waitForResponse(
       (resp) => /variantpricecalc/i.test(resp.url()) && resp.ok(),
@@ -971,7 +971,7 @@ When(/^(?:I|the user)\s+open(?:s)?\s+the\s+price\s+summary$/i, async function ()
     try {
       const t = loc.first();
       await t.waitFor({ state: 'visible', timeout: 5000 });
-      await t.scrollIntoViewIfNeeded().catch(() => { });
+      await t.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => { });
       await t.click({ timeout: 5000 });
       opened = true;
       break;

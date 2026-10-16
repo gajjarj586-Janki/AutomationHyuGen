@@ -835,6 +835,16 @@ After(async function (scenario) {
   if (this.page) await this.page.close();
   if (this.context) await this.context.close();
   if (this.browser) await this.browser.close();
+
+  // Cucumber's `retry` config (cucumber.js) re-runs a failed scenario
+  // immediately with no gap, so a brief backend/environment blip (e.g. a
+  // flaky API on Dev/Stage) can take out both attempts back to back. Pause
+  // before the retry attempt starts so it has a better chance of landing
+  // outside that window.
+  if (scenario.willBeRetried) {
+    console.log('⏳ Scenario failed — pausing 10s before Cucumber retries it...');
+    await new Promise((resolve) => setTimeout(resolve, 10000));
+  }
 });
 
 /**

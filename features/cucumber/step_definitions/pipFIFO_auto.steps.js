@@ -85,7 +85,7 @@ Given('user clicks on Buying Tools', async function () {
   ].join(', ')).first();
 
   await btn.waitFor({ state: 'visible', timeout: 15000 });
-  await btn.scrollIntoViewIfNeeded().catch(() => {});
+  await btn.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
   await this.page.waitForTimeout(500);
   await btn.click();
   await this.page.waitForTimeout(1500); // wait for menu/drawer to open
@@ -126,7 +126,7 @@ Given('user selects Test Drive', async function () {
   const el = element.asElement();
   if (!el) throw new Error('Could not find the Test Drive link in the Buying Tools drawer');
 
-  await el.scrollIntoViewIfNeeded().catch(() => {});
+  await el.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
   await this.page.waitForTimeout(300);
 
   try {
@@ -217,7 +217,7 @@ Given('the user selects Powertrain from test data and clicks Next', async functi
 
   if ((await setLocationBtn.count()) > 0 && await setLocationBtn.isVisible().catch(() => false)) {
     console.log(`📍 "Set your location" step detected — setting postcode: ${postcode}`);
-    await setLocationBtn.scrollIntoViewIfNeeded().catch(() => {});
+    await setLocationBtn.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     await setLocationBtn.click({ timeout: 5000 });
     await this.page.waitForTimeout(1500);
     const { handleLocationModal } = await import('./commonHelpers.js');
@@ -288,7 +288,7 @@ When('the user selects Powertrain from test data', async function () {
   // longer to populate while multiple browsers contend for the stage site at once.
   const visible = await dropdown.waitFor({ state: 'visible', timeout: 20000 }).then(() => true).catch(() => false);
   if (visible) {
-    await dropdown.scrollIntoViewIfNeeded().catch(() => {});
+    await dropdown.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     const options = await dropdown.locator('option').allTextContents();
     console.log(`  Powertrain dropdown options: [${options.join(', ')}]`);
     const match = options.find(o => o.trim().toLowerCase().includes(powertrain.toLowerCase()));

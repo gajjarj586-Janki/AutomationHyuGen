@@ -57,7 +57,7 @@ When('the user enters a postcode', async function () {
   // Real DOM: id="inpCode1" name="postCode"
   const field = this.page.locator('#inpCode1, input[name="postCode"]').first();
   if ((await field.count()) > 0) {
-    await field.scrollIntoViewIfNeeded().catch(() => {});
+    await field.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     await field.fill(postcode);
     console.log(`📋 Entered Postcode: ${postcode}`);
   }
@@ -86,7 +86,7 @@ When('the user leaves last name blank', async function () {
   // Real DOM: id="lastName" name="lastName"
   const field = this.page.locator('#lastName, input[name="lastName"]').first();
   if ((await field.count()) > 0) {
-    await field.scrollIntoViewIfNeeded().catch(() => {});
+    await field.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     await field.fill('');
     console.log('📋 Left Last Name blank');
   } else {
@@ -98,7 +98,7 @@ When('the user submits the RYI form without completing required fields', async f
   // Real DOM: form#form-ryi-form, submit button has class btn btn-primary
   const _sb = this.page.locator('#form-ryi-form button[type="submit"], .cp-ryi__form button[type="submit"]').first();
   if ((await _sb.count()) > 0) {
-    await _sb.scrollIntoViewIfNeeded().catch(() => {});
+    await _sb.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     await _sb.evaluate(el => el.click()).catch(async () => { await _sb.click({ force: true }).catch(() => {}); });
     console.log('📋 Submitted RYI form without filling required fields');
   }
@@ -119,7 +119,7 @@ When('the user enters a last name', async function () {
   // Real DOM: id="lastName" name="lastName"
   const field = this.page.locator('#lastName, input[name="lastName"]').first();
   if ((await field.count()) > 0) {
-    await field.scrollIntoViewIfNeeded().catch(() => {});
+    await field.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     await field.fill(lastName);
     console.log(`📋 Entered Last Name: ${lastName}`);
   }

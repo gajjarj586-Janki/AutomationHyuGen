@@ -83,7 +83,7 @@ async function clickInModal(modal, page, selectors, label) {
   const present = (await btn.count().catch(() => 0)) > 0 && (await btn.isVisible().catch(() => false));
   assert.ok(present,
     `"${label}" button not found on the current modal step. Visible panel: "${(await visiblePanelText(modal)).slice(0, 160)}"`);
-  await btn.scrollIntoViewIfNeeded().catch(() => {});
+  await btn.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
   await btn.click();
   console.log(`✅ Clicked ${label}`);
   await page.waitForTimeout(1500);
@@ -406,7 +406,7 @@ Given('user clicks on Contact a dealer', async function () {
     'button:has-text("Contact a dealer")',
   ].join(', ')).first();
   await cadBtn.waitFor({ state: 'visible', timeout: 15000 });
-  await cadBtn.scrollIntoViewIfNeeded().catch(() => {});
+  await cadBtn.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
   await this.page.waitForTimeout(500);
   await cadBtn.click();
   console.log('✅ Clicked Contact a dealer button');
@@ -484,7 +484,7 @@ When('the user selects Model of interest from test data', async function () {
     'select[id*="model" i]',
   ].join(', ')).first();
   if ((await _mdd.count()) > 0) {
-    await _mdd.scrollIntoViewIfNeeded().catch(() => {});
+    await _mdd.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     if (_model) {
       await _mdd.selectOption({ label: _model }).catch(async () => {
         const _o = await _mdd.locator('option').allTextContents();
@@ -503,7 +503,7 @@ When('the user selects Model of interest from test data', async function () {
   const _pdd = this.page.locator('#cad-page-energy-type, select[name="FuelType__c"], select[id*="energy" i], select[id*="powertrain" i], select[id*="fuel" i]').first();
   const _ptVis = await _pdd.waitFor({ state: 'visible', timeout: 5000 }).then(() => true).catch(() => false);
   if (_ptVis) {
-    await _pdd.scrollIntoViewIfNeeded().catch(() => {});
+    await _pdd.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     if (_pt) {
       await _pdd.selectOption({ label: _pt }).catch(async () => {
         const _o3 = await _pdd.locator('option').allTextContents();
@@ -730,7 +730,7 @@ Given('user clicks on Book a valuation', async function () {
     'button:has-text("Book a valuation")',
   ].join(', ')).first();
   await bavBtn.waitFor({ state: 'visible', timeout: 15000 });
-  await bavBtn.scrollIntoViewIfNeeded().catch(() => {});
+  await bavBtn.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
   await this.page.waitForTimeout(500);
   await bavBtn.click();
   console.log('✅ Clicked Book a valuation button');
@@ -795,7 +795,7 @@ When('the user selects Model from test data', async function () {
   }, null, { timeout: 25000 }).catch(() => {});
   if ((await _mdd.count()) > 0) {
     await _mdd.waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
-    await _mdd.scrollIntoViewIfNeeded().catch(() => {});
+    await _mdd.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     if (_model) {
       await _mdd.selectOption({ label: _model }).catch(async () => {
         const _o = await _mdd.locator('option').allTextContents();
@@ -830,7 +830,7 @@ When('the user selects Model from test data', async function () {
       const sel = document.querySelector('#cad-page-energy-type, #test-drive-modal-energy-type-pcm2, select[name="FuelType__c"]');
       return sel && sel.options && sel.options.length > 1;
     }, null, { timeout: 20000 }).catch(() => {});
-    await _pdd.scrollIntoViewIfNeeded().catch(() => {});
+    await _pdd.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     if (_pt) {
       await _pdd.selectOption({ label: _pt }).catch(async () => {
         const _o3 = await _pdd.locator('option').allTextContents();

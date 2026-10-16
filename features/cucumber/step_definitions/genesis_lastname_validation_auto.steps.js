@@ -156,7 +156,7 @@ When('the user selects {string} from {string} dropdown', async function (optionL
 
   if (container) {
     const trigger = container.locator('a.cm-select__placeholder, .cm-select__placeholder').first();
-    await trigger.scrollIntoViewIfNeeded().catch(() => {});
+    await trigger.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     await trigger.click({ force: true }).catch(async () => {
       await trigger.evaluate((el) => el.click()).catch(() => {});
     });

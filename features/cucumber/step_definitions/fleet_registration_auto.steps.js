@@ -83,7 +83,7 @@ When('the user submits the fleet registration form', async function () {
   const SUBMIT_SEL = 'form.fleet-registration button[type="submit"], button.btn.submit';
   const submitBtn = this.page.locator(SUBMIT_SEL).first();
   if ((await submitBtn.count()) > 0) {
-    await submitBtn.scrollIntoViewIfNeeded().catch(() => {});
+    await submitBtn.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     await submitBtn.waitFor({ state: 'visible', timeout: 10000 });
     // Trigger click and wait for the resulting page load together
     await Promise.all([

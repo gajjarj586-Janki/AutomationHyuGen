@@ -172,7 +172,7 @@ async function setLocationViaModal(page, postcode) {
   // Click "Set location" button — it's a <div role="button">, not a <button>
   const setLocDiv = page.locator(LOC.setLocation.button).first();
   if ((await setLocDiv.count()) > 0 && (await setLocDiv.isVisible().catch(() => false))) {
-    await setLocDiv.scrollIntoViewIfNeeded().catch(() => {});
+    await setLocDiv.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     await setLocDiv.click({ timeout: 5000 });
     await page.waitForTimeout(1500);
   } else {

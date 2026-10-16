@@ -165,12 +165,16 @@ Given('the user navigates to Test drive', async function () {
     || 'https://stage.hyundai.com.au/au/en/book-a-test-drive';
   console.log(`📋 Navigating to Test Drive: ${url}`);
   await this.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-  await this.page.waitForTimeout(2000);
 });
 
 Given('Form has loaded successfully', async function () {
   await this.page.waitForLoadState('domcontentloaded');
-  await this.page.waitForTimeout(3000);
+  // Event-driven: resolves as soon as the page has real content, instead of
+  // always paying a fixed 3s regardless of how fast the page actually loads.
+  await this.page.waitForFunction(
+    () => (document.body?.innerText || '').trim().length > 200,
+    { timeout: 10000 },
+  ).catch(() => {});
 
   // Check for 404 / error page
   const h1 = await this.page.locator('h1, h2').first().textContent().catch(() => '');
@@ -229,9 +233,9 @@ Given('the user has selected a vehicle, powertrain and dealer', async function (
     // Verify the model was actually set in the DOM
     const actualModelVal = await modelDropdown.inputValue().catch(() => '');
     console.log(`📋 Selected model: ${model} (actual DOM value: ${actualModelVal}, success: ${modelSelected})`);
-
-    // Wait for Vue.js to react and potentially render the FuelType dropdown
-    await this.page.waitForTimeout(2500);
+    // Vue.js reacting to the model change and (maybe) rendering the FuelType
+    // dropdown is already awaited below via powertrainDropdown.waitFor(...) —
+    // no separate fixed sleep needed here.
   }
 
   // Wait for powertrain (FuelType) dropdown to appear after model selection
@@ -239,6 +243,20 @@ Given('the user has selected a vehicle, powertrain and dealer', async function (
   const powertrainDropdown = this.page.locator('select[name="FuelType__c"], select#test-drive-page-energy-type').first();
   try {
     await powertrainDropdown.waitFor({ state: 'visible', timeout: 8000 });
+    // Becoming visible doesn't mean Vue has populated the model-specific
+    // <option> list yet — wait for that too (event-driven via
+    // MutationObserver, capped at 5s), or selecting too early reads an empty
+    // options array and the form later rejects submission with
+    // "Please select a powertrain".
+    await powertrainDropdown.evaluate((el) => (
+      el.options.length > 1 ? undefined : new Promise((resolve) => {
+        const obs = new MutationObserver(() => {
+          if (el.options.length > 1) { obs.disconnect(); resolve(); }
+        });
+        obs.observe(el, { childList: true });
+        setTimeout(() => { obs.disconnect(); resolve(); }, 5000);
+      })
+    ));
   } catch { /* not present for this model */ }
 
   const ptCount = await powertrainDropdown.count();
@@ -269,7 +287,7 @@ Given('the user has selected a vehicle, powertrain and dealer', async function (
       });
       const actualPtVal = await powertrainDropdown.inputValue().catch(() => '');
       console.log(`📋 Selected powertrain/fuel type: ${target} (actual DOM value: ${actualPtVal})`);
-      await this.page.waitForTimeout(1000);
+      await this.page.waitForTimeout(300);
     }
   } else {
     console.log('⚠️ Powertrain dropdown not visible — skipping');
@@ -278,12 +296,12 @@ Given('the user has selected a vehicle, powertrain and dealer', async function (
   // Set location via the Set location button / modal
   const setLocationBtn = this.page.locator('div[role="button"]:has-text("Set location"), button:has-text("Set location"), a:has-text("Set location")').first();
   if ((await setLocationBtn.count()) > 0 && (await setLocationBtn.isVisible().catch(() => false))) {
-    await setLocationBtn.scrollIntoViewIfNeeded().catch(() => {});
+    await setLocationBtn.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     await setLocationBtn.click({ timeout: 5000 });
-    await this.page.waitForTimeout(1500);
 
     // There are TWO inputs with same ID — first is hidden (0x0), second is visible
     const modalInputs = this.page.locator('.hyu-postcode-modal input#locaion-modal-input');
+    await modalInputs.last().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
     const inputCount = await modalInputs.count();
     let modalInput = null;
     for (let i = inputCount - 1; i >= 0; i--) {
@@ -293,22 +311,22 @@ Given('the user has selected a vehicle, powertrain and dealer', async function (
 
     if (modalInput) {
       await modalInput.fill(postcode.toString());
-      await this.page.waitForTimeout(500);
       await modalInput.press('Enter');
-      await this.page.waitForTimeout(2000);
 
-      // Click first result item
+      // Click first result item — wait for the autocomplete list to render
+      // (event-driven) instead of a fixed sleep before checking.
       const resultItem = this.page.locator('.tingle-modal--visible .hyu-postcode-modal--location-list li').first();
+      await resultItem.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
       if ((await resultItem.count()) > 0 && (await resultItem.isVisible().catch(() => false))) {
         await resultItem.click();
-        await this.page.waitForTimeout(3000);
       }
 
-      // Click Set dealer button
+      // Click Set dealer button — same: wait for it to render rather than sleep.
       const setDealerBtn = this.page.locator('.tingle-modal--visible .js-hyu-postcode-modal--btn-set-dealer, .tingle-modal--visible button:has-text("Set dealer")').first();
+      await setDealerBtn.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
       if ((await setDealerBtn.count()) > 0 && (await setDealerBtn.isVisible().catch(() => false))) {
         await setDealerBtn.click();
-        await this.page.waitForTimeout(2000);
+        await this.page.waitForTimeout(500);
       }
     } else {
       console.log('⚠️ No visible modal input found — cancelling');
@@ -329,8 +347,14 @@ When('the user accepts the privacy consent checkbox', async function () {
     'input[type="checkbox"][name*="CPPD" i], input[type="checkbox"][name*="Marketing" i]'
   ).first();
   if ((await checkbox.count()) > 0) {
-    await checkbox.scrollIntoViewIfNeeded().catch(() => {});
-    const isChecked = await checkbox.isChecked().catch(() => false);
+    // No explicit timeout here used to mean a hidden-but-custom-styled
+    // checkbox (common pattern: real <input> invisible, a <label> shown
+    // instead) silently ate Playwright's full 30s default actionability
+    // timeout before the catch swallowed it. Fail fast instead — the
+    // parentLabel click path below is the one that actually works for that
+    // case anyway.
+    await checkbox.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
+    const isChecked = await checkbox.isChecked({ timeout: 3000 }).catch(() => false);
     if (!isChecked) {
       const parentLabel = checkbox.locator('xpath=ancestor::label[1]').first();
       if ((await parentLabel.count()) > 0) {
@@ -373,10 +397,9 @@ When('the user does not accept the privacy consent checkbox', async function () 
   ).first();
 
   if ((await checkbox.count()) > 0) {
-    await checkbox.scrollIntoViewIfNeeded().catch(() => {});
-    await this.page.waitForTimeout(300);
+    await checkbox.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
 
-    const isChecked = await checkbox.isChecked().catch(() => false);
+    const isChecked = await checkbox.isChecked({ timeout: 3000 }).catch(() => false);
     if (isChecked) {
       // Use parent label click (same approach as the "accepts" step) to reliably toggle
       const parentLabel = checkbox.locator('xpath=ancestor::label[1]').first();

@@ -30,7 +30,7 @@ async function _fillLocation(page, postcode) {
     console.log('⚠️ Location input not found');
     return;
   }
-  await _loc.scrollIntoViewIfNeeded().catch(() => {});
+  await _loc.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
   await _loc.click({ timeout: 5000 });
   await _loc.clear().catch(() => {});
 
@@ -102,7 +102,7 @@ async function _setDealerType(page, typeLabel) {
       `Current URL: ${page.url()}`
     );
   }
-  await trigger.scrollIntoViewIfNeeded().catch(() => {});
+  await trigger.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
   // Try normal click; if intercepted by an overlay, retry with force
   try {
     await trigger.click({ timeout: 5000 });
@@ -245,7 +245,7 @@ When('user clicks on Search on Find your local dealer', async function () {
   ].join(', ')).first();
 
   if ((await btn.count()) > 0) {
-    await btn.scrollIntoViewIfNeeded().catch(() => {});
+    await btn.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     await btn.click({ timeout: 5000 }).catch(async () => {
       console.log('📋 Normal click failed — trying force click');
       await btn.click({ force: true, timeout: 5000 }).catch(async () => {
@@ -302,7 +302,7 @@ When('user clicks on Contact dealer', async function () {
   ].join(', ')).first();
 
   if ((await contactBtn.count()) > 0 && await contactBtn.isVisible().catch(() => false)) {
-    await contactBtn.scrollIntoViewIfNeeded().catch(() => {});
+    await contactBtn.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     await contactBtn.click({ timeout: 10000 });
     console.log('✅ Clicked Contact dealer');
   } else {
@@ -383,7 +383,7 @@ When('user clicks on Next', async function () {
   }
 
   if ((await nextBtn.count()) > 0) {
-    await nextBtn.scrollIntoViewIfNeeded().catch(() => {});
+    await nextBtn.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     try {
       await nextBtn.click({ timeout: 8000 });
     } catch (e) {
@@ -436,7 +436,7 @@ When('the user selects Model from test data on FAD', async function () {
   }
 
   await _mdd.waitFor({ state: 'visible', timeout: 8000 }).catch(() => {});
-  await _mdd.scrollIntoViewIfNeeded().catch(() => {});
+  await _mdd.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
 
   // Poll until real options load (async via AJAX)
   let _opts = [];
@@ -507,7 +507,7 @@ When('the user clicks Quote & Book a Service', async function () {
   }
 
   if ((await btn.count()) > 0) {
-    await btn.scrollIntoViewIfNeeded().catch(() => {});
+    await btn.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     await this.page.waitForTimeout(400);
     try {
       await btn.click({ timeout: 8000 });
@@ -570,7 +570,7 @@ When('the user fills State from test data', async function () {
   console.log(`📋 Filling State: "${_want}"`);
   const _dd = this.page.locator('select[name*="state" i], select[id*="state" i], select[aria-label*="state" i], select[name*="province" i]').first();
   if ((await _dd.count()) > 0) {
-    await _dd.scrollIntoViewIfNeeded().catch(() => {});
+    await _dd.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     if (_want) {
       await _dd.selectOption({ label: _want }).catch(async () => {
         const _opts = await _dd.locator('option').allTextContents();
@@ -623,7 +623,7 @@ When('click on Search Vehicle button', async function () {
     }
   }
   if (btn) {
-    await btn.scrollIntoViewIfNeeded().catch(() => {});
+    await btn.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     try { await btn.click({ timeout: 8000 }); }
     catch { await btn.click({ force: true, timeout: 5000 }); }
     console.log('✅ Clicked Search Vehicle');

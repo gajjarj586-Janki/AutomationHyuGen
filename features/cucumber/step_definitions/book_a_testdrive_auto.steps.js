@@ -185,7 +185,7 @@ Given('the user has selected a vehicle and dealer', async function () {
   // Set location via the Set location button / modal
   const setLocationBtn = this.page.locator('div[role="button"]:has-text("Set location"), button:has-text("Set location"), a:has-text("Set location")').first();
   if ((await setLocationBtn.count()) > 0 && (await setLocationBtn.isVisible().catch(() => false))) {
-    await setLocationBtn.scrollIntoViewIfNeeded().catch(() => {});
+    await setLocationBtn.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
     await setLocationBtn.click({ timeout: 5000 });
     await this.page.waitForTimeout(1500);
 
@@ -241,11 +241,9 @@ When('the user submits the test drive booking', async function () {
     });
     console.log(`📋 Selected purchase timeline: ${purchaseTime}`);
   }
-  await this.page.waitForTimeout(500);
 
   // Check privacy consent checkbox
   await this.page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-  await this.page.waitForTimeout(300);
   const privacyCheckbox = this.page.locator('input[type="checkbox"][name*="privacy" i], input[type="checkbox"][name*="consent" i], input[type="checkbox"]').first();
   if ((await privacyCheckbox.count()) > 0) {
     const isChecked = await privacyCheckbox.isChecked().catch(() => false);
@@ -259,15 +257,14 @@ When('the user submits the test drive booking', async function () {
     }
     console.log('📋 Checked privacy consent');
   }
-  await this.page.waitForTimeout(500);
 
   // Click Submit request button (specifically the test drive form button, NOT the search submit)
   const submitBtn = this.page.locator('form.test-drive button:has-text("Submit request"), form.hyu-page-form button:has-text("Submit"), .hyu-page-form button[type="submit"]').first();
   const submitCount = await submitBtn.count();
   if (submitCount > 0) {
-    // Scroll button into view
+    // scrollIntoViewIfNeeded + the click() below already wait for the button
+    // to be stable/actionable — no need for a fixed settle sleep in between.
     await submitBtn.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {});
-    await this.page.waitForTimeout(500);
 
     // Dismiss cookie consent if blocking
     const cookieBtn = this.page.locator('#onetrust-accept-btn-handler, button:has-text("Accept All")').first();
@@ -381,7 +378,7 @@ When('the user submits the test drive booking', async function () {
   } else {
     console.log('⚠️ Submit button not found');
   }
-  await this.page.waitForTimeout(2000);
+  await this.page.waitForTimeout(500);
 });
 
 Then('the booking should be submitted successfully', async function () {
@@ -406,24 +403,19 @@ Then('the booking should be submitted successfully', async function () {
 
   // Require an actual on-page confirmation — the page shows "All done!" and
   // "Your test drive booking request has been submitted successfully."
-  // Budget raised from 15s to 45s to match.
-  for (let i = 0; i < 45; i++) {
-    await this.page.waitForTimeout(1000);
-    const allDone = this.page.getByText(/all done|submitted successfully|booking request has been submitted|we.?ll be in touch/i).first();
-    if ((await allDone.count()) > 0 && (await allDone.isVisible().catch(() => false))) {
-      const text = await allDone.textContent().catch(() => '');
-      console.log(`📋 Success message found: ${text}`);
-      this.successMessage = { displayed: true, text };
-      return;
-    }
-    const successEl = this.page.locator('[class*="thank"], [class*="success"], [class*="confirm"], [class*="done"]').first();
-    if ((await successEl.count()) > 0 && (await successEl.isVisible().catch(() => false))) {
-      const text = await successEl.textContent().catch(() => '');
-      console.log(`📋 Success element visible: ${text?.substring(0, 100)}`);
-      this.successMessage = { displayed: true, text };
-      return;
-    }
-  }
+  // Event-driven (45s budget kept as the upper bound) instead of a fixed
+  // 1s-per-iteration poll, so this resolves as soon as the message renders
+  // rather than always paying for however many 1s ticks it takes to notice.
+  const allDone = this.page.getByText(/all done|submitted successfully|booking request has been submitted|we.?ll be in touch/i).first();
+  const successEl = this.page.locator('[class*="thank"], [class*="success"], [class*="confirm"], [class*="done"]').first();
+  const confirmation = allDone.or(successEl);
+  try {
+    await confirmation.first().waitFor({ state: 'visible', timeout: 45000 });
+    const text = await confirmation.first().textContent().catch(() => '');
+    console.log(`📋 Success indicator found: ${text?.substring(0, 150)}`);
+    this.successMessage = { displayed: true, text };
+    return;
+  } catch { /* fall through to diagnostics below */ }
 
   this.successMessage = { displayed: false };
 
