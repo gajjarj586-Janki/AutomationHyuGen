@@ -11,11 +11,32 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
+import dotenv from 'dotenv';
+import localTestData from '../features/cucumber/test-data/localTestData.js';
+import { getTargetEnvironment } from '../features/cucumber/support/targetEnvironment.js';
+
+dotenv.config();
 
 // ─── Defaults ─────────────────────────────────────────────────
 const DEFAULT_RESULTS_PATH = path.resolve('test-results', 'cucumber-report.json');
 const OUTPUT_DIR = path.resolve('excel-reports');
 const SCREENSHOTS_DIR = path.resolve('screenshots');
+
+// Which environment the tests actually ran against is decided solely by
+// TARGET_ENVIRONMENT in .env — same source world.js uses at run time. There
+// used to be a .cache/activeEnvironment.json snapshot the report read
+// instead, but nothing writes that file anymore (dead since the Confluence
+// fetch step was removed), so it silently showed whatever environment was
+// active the last time it existed. Resolve live from the same
+// localTestData.js table world.js reads, instead of a stale cache.
+function resolveActiveEnvironment() {
+  const envName = getTargetEnvironment();
+  const pageUrls = {};
+  for (const row of localTestData['Environment URLs'] || []) {
+    if (row.Page) pageUrls[row.Page.toLowerCase()] = row[envName] || row['Production'] || '';
+  }
+  return { envName, envBaseUrl: pageUrls['home'] || '', pageUrls };
+}
 
 // ─── Read Cucumber JSON ──────────────────────────────────────
 function loadResults(jsonPath) {
@@ -367,6 +388,10 @@ function flattenResults(cucumberJson) {
       // This is the most reliable source — it captures the actual browser URL
       let successMessage = '';
       let scenarioNote = '';
+      let leadId = '';
+      let leadIdLabel = 'Lead ID';
+      let metaStatusCode = '';
+      let apiResponse = '';
       const featureFileKey = (feature.uri || featureName || '')
         .replace(/\\/g, '/')
         .split('/')
@@ -382,6 +407,10 @@ function flattenResults(cucumberJson) {
           const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
           if (meta.testUrl) testUrl = meta.testUrl;  // Always prefer metadata URL
           if (meta.note) scenarioNote = String(meta.note);
+          if (meta.leadId) leadId = String(meta.leadId);
+          if (meta.leadIdLabel) leadIdLabel = String(meta.leadIdLabel);
+          if (meta.apiStatusCode) metaStatusCode = String(meta.apiStatusCode);
+          if (meta.apiResponse) apiResponse = String(meta.apiResponse);
           if (meta.successMessage) {
             successMessage = typeof meta.successMessage === 'string'
               ? meta.successMessage
@@ -390,30 +419,24 @@ function flattenResults(cucumberJson) {
         }
       } catch { /* ignore */ }
 
-      // Fall back to activeEnvironment.json page URLs based on feature/scenario name
+      // Fall back to the active environment's page URLs based on feature/scenario name
       if (!testUrl) {
-        try {
-          const envCachePath = path.resolve('.cache', 'activeEnvironment.json');
-          if (fs.existsSync(envCachePath)) {
-            const envData = JSON.parse(fs.readFileSync(envCachePath, 'utf-8'));
-            const pageUrls = envData.pageUrls || {};
-            const scenarioLower = (scenario.name || '').toLowerCase();
-            for (const [key, url] of Object.entries(pageUrls)) {
-              if (url && (scenarioLower.includes(key) || key.split(' ').some(w => w.length > 3 && scenarioLower.includes(w)))) {
-                testUrl = url;
-                break;
-              }
-            }
+        const { pageUrls } = resolveActiveEnvironment();
+        const scenarioLower = (scenario.name || '').toLowerCase();
+        for (const [key, url] of Object.entries(pageUrls)) {
+          if (url && (scenarioLower.includes(key) || key.split(' ').some(w => w.length > 3 && scenarioLower.includes(w)))) {
+            testUrl = url;
+            break;
           }
-        } catch { /* ignore */ }
+        }
       }
 
       // Also try to load API status code from payload JSON
       const payloadData = findLatestPayloadJson(scenario.name || 'Unnamed Scenario', featureFileKey);
-      let apiStatusCode = '';
+      let apiStatusCode = metaStatusCode;
       if (payloadData && payloadData.length > 0) {
         const lastSubmission = payloadData[payloadData.length - 1];
-        apiStatusCode = String(lastSubmission.statusCode || '');
+        apiStatusCode = String(lastSubmission.statusCode || apiStatusCode);
       }
 
       const payloadScreenshotPath = findLatestPayloadScreenshot(scenario.name || 'Unnamed Scenario', featureFileKey);
@@ -442,6 +465,9 @@ function flattenResults(cucumberJson) {
         testUrl,
         successMessage,
         apiStatusCode,
+        apiResponse,
+        leadId,
+        leadIdLabel,
         payloadScreenshotPath,
       });
     }
@@ -472,17 +498,7 @@ function buildHTML(cases, stats, durationMs) {
     ? uniqueFeatures.join(', ') + ' — Test Report'
     : 'Test Report';
 
-  // Extract environment info from active environment cache
-  let envName = '';
-  let envBaseUrl = '';
-  try {
-    const envCachePath = path.resolve('.cache', 'activeEnvironment.json');
-    if (fs.existsSync(envCachePath)) {
-      const envData = JSON.parse(fs.readFileSync(envCachePath, 'utf-8'));
-      envName = envData.activeEnvironment || '';
-      envBaseUrl = envData.baseUrl || '';
-    }
-  } catch { /* ignore */ }
+  const { envName, envBaseUrl } = resolveActiveEnvironment();
 
   const statusBadge = (status) => {
     const colors = {
@@ -527,21 +543,39 @@ function buildHTML(cases, stats, durationMs) {
     return `<div style="display:flex;flex-direction:column;gap:8px;">${parts.join('')}</div>`;
   };
 
+  // The payload screenshot is too small to read in the PDF, so the response
+  // code, lead/record ID and response body are also written out as text.
+  const renderApiInfo = (caseData) => {
+    const parts = [];
+    if (caseData.apiStatusCode) {
+      const isOk = parseInt(caseData.apiStatusCode, 10) < 400;
+      const bg = isOk ? '#C6EFCE' : '#FFC7CE';
+      const fg = isOk ? '#276221' : '#9C0006';
+      parts.push(`<div><span style="background:${bg};color:${fg};padding:2px 8px;border-radius:3px;font-weight:bold;font-size:11px;">Response code: HTTP ${escapeHtml(caseData.apiStatusCode)}</span></div>`);
+    }
+    if (caseData.leadId) {
+      parts.push(`<div style="font-size:10px;background:#E6F4EA;color:#137333;border:1px solid #81C995;border-radius:3px;padding:3px 6px;word-break:break-all;"><strong>${escapeHtml(caseData.leadIdLabel || 'Lead ID')}:</strong> ${escapeHtml(caseData.leadId)}</div>`);
+    }
+    if (caseData.apiResponse) {
+      const text = caseData.apiResponse.length > 240 ? `${caseData.apiResponse.slice(0, 240)}…` : caseData.apiResponse;
+      parts.push(`<div style="font-size:9px;color:#333;background:#F5F6F8;border:1px solid #DDE;border-radius:3px;padding:3px 6px;font-family:Consolas,Menlo,monospace;word-break:break-all;"><strong style="font-family:Arial,sans-serif;">Response:</strong> ${escapeHtml(text)}</div>`);
+    }
+    return parts.join('');
+  };
+
   const renderPayloadCell = (caseData) => {
+    const apiInfoHtml = renderApiInfo(caseData);
     if (caseData.payloadScreenshotPath) {
       const imageUrl = pathToFileURL(caseData.payloadScreenshotPath).href;
       return `
         <div style="display:flex;flex-direction:column;gap:4px;">
+          ${apiInfoHtml}
           <img src="${imageUrl}" alt="API payload" style="width:340px;max-height:220px;object-fit:contain;border:1px solid #CCD3E0;border-radius:4px;" />
           <div style="font-size:8px;color:#555;word-break:break-all;">${escapeHtml(path.basename(caseData.payloadScreenshotPath))}</div>
         </div>`;
     }
-    if (caseData.apiStatusCode) {
-      const code = parseInt(caseData.apiStatusCode, 10);
-      const isOk = code < 400;
-      const bg = isOk ? '#C6EFCE' : '#FFC7CE';
-      const fg = isOk ? '#276221' : '#9C0006';
-      return `<div style="text-align:center;padding:8px 0;"><span style="background:${bg};color:${fg};padding:4px 12px;border-radius:4px;font-weight:bold;font-size:13px;">HTTP ${escapeHtml(caseData.apiStatusCode)}</span></div>`;
+    if (apiInfoHtml) {
+      return `<div style="display:flex;flex-direction:column;gap:4px;">${apiInfoHtml}</div>`;
     }
     return '<div style="color:#777;font-size:9px;">No API call captured</div>';
   };
@@ -598,6 +632,11 @@ function buildHTML(cases, stats, durationMs) {
   th { background: #1F3864; color: #fff; padding: 8px 6px; font-size: 10px; text-align: left; text-transform: uppercase; letter-spacing: 0.4px; }
   td { padding: 7px 6px; border-bottom: 1px solid #DDE; vertical-align: top; font-size: 10px; }
   tr:nth-child(even) td { background: #F8F9FB; }
+  /* Keep each test case's row on one page: without this a row that reaches the
+     bottom of a page is split, leaving e.g. the Lead ID on one page and the
+     screenshots on the next. The column header row still repeats per page. */
+  tr { break-inside: avoid; page-break-inside: avoid; }
+  thead { display: table-header-group; }
 
   /* ── Legend ── */
   .legend { display: flex; gap: 14px; margin: 14px 0 6px; font-size: 10px; }

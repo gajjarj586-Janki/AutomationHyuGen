@@ -30,6 +30,7 @@ import { execSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import dotenv from 'dotenv';
+import { getTargetEnvironment } from '../features/cucumber/support/targetEnvironment.js';
 
 dotenv.config();
 
@@ -120,7 +121,7 @@ async function stepGenerateAndUploadReports(runStartMs, reportOnly = false) {
   // The environment tests actually ran against is whatever TARGET_ENVIRONMENT
   // in .env was for this whole process (world.js reads the same value) — no
   // Confluence round-trip needed to know which "<env> Report" column to target.
-  const activeEnvironment = (process.env.TARGET_ENVIRONMENT || 'Stage').trim();
+  const activeEnvironment = getTargetEnvironment();
   console.log(`   → Target Confluence column: "${activeEnvironment} Report"`);
 
   // Report on whichever feature files cucumber.js actually ran this pass —
@@ -169,7 +170,7 @@ async function stepGenerateAndUploadReports(runStartMs, reportOnly = false) {
     if (customReport) {
       try {
         const dir = path.join(ROOT, 'excel-reports');
-        const envName = (process.env.TARGET_ENVIRONMENT || '').trim().replace(/[^a-zA-Z0-9]/g, '');
+        const envName = getTargetEnvironment();
         const prefix = customReport.prefix;
         const envRe = envName
           ? new RegExp(`^${prefix}_${envName}_.*\\.pdf$`, 'i')
@@ -230,7 +231,7 @@ async function orchestrate() {
   const start = Date.now();
 
   banner('🤖 Test Agent — Starting Pipeline');
-  console.log(`  Environment:    ${(process.env.TARGET_ENVIRONMENT || 'Stage').trim()}`);
+  console.log(`  Environment:    ${getTargetEnvironment()}`);
   console.log(`  Skip generate:  ${skipGenerate}`);
   console.log(`  Update steps:   ${updateSteps}  ${updateSteps ? '' : '(existing step files will be preserved)'}`);
   console.log(`  Report only:    ${reportOnly}`);

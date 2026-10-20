@@ -1,3 +1,6 @@
+import localTestData from '../test-data/localTestData.js';
+import { getTargetEnvironment } from './targetEnvironment.js';
+
 const SUBMIT_SELECTORS = [
   'form#form-ryi-form button[type="submit"]',
   'form#form-ryi-form input[type="submit"]',
@@ -818,8 +821,75 @@ function normalizeGenesisUrl(url) {
   return url;
 }
 
+// Which Genesis site to hit is decided by TARGET_ENVIRONMENT in .env, like
+// every other feature. Feature files name the page ("Genesis Book a Service")
+// and the URL comes from that page's row in the Environment URLs table of
+// localTestData.js. A full URL is still accepted: its host is swapped for the
+// active environment's (taken from the "Genesis RYI Page" row). A blank cell
+// (e.g. Dev1) leaves a full URL as written and fails a page name loudly.
+const GENESIS_HOST_RE = /^https?:\/\/(?:(?:dev|stage)\.genesis-motors\.com\.au|www\.genesis\.com)/i;
+
+function applyTargetEnvironment(target) {
+  const envName = getTargetEnvironment();
+  const rows = localTestData['Environment URLs'] || [];
+  const norm = (s) => String(s).trim().toLowerCase();
+
+  if (!/^https?:\/\//i.test(target)) {
+    const row = rows.find((r) => norm(r.Page) === norm(target));
+    if (!row) throw new Error(`No page named "${target}" in the Environment URLs table of localTestData.js`);
+    if (!row[envName]) throw new Error(`Page "${target}" has no URL for environment "${envName}" in localTestData.js`);
+    return row[envName];
+  }
+
+  if (!GENESIS_HOST_RE.test(target)) return target;
+  const ryi = rows.find((r) => r.Page === 'Genesis RYI Page');
+  if (!ryi || !ryi[envName]) {
+    console.log(`⚠️  No Genesis URL for environment "${envName}" — using URL as written: ${target}`);
+    return target;
+  }
+  return target.replace(GENESIS_HOST_RE, new URL(ryi[envName]).origin);
+}
+
+// The Genesis forms add the dealer code (lmsDealerCode, or DealerCode__c on
+// Book a Service) to the submit payload from the retail outlet the visitor
+// picked in the header location modal, which the site keeps in localStorage
+// as LOCAL_DEALER. Without picking one the field is sent empty. Pick the
+// outlet for the postcode the same way a visitor would, before the form is
+// filled.
+export async function setRetailOutlet(page, postcode) {
+  await page.locator('.js-location-modal-toggle-cta').first().click();
+
+  const searchInput = page.locator('#location-modal-search-input');
+  await searchInput.waitFor({ state: 'visible', timeout: 10000 });
+  await searchInput.fill(String(postcode));
+
+  const firstSuggestion = page.locator('#location-modal li button').first();
+  await firstSuggestion.waitFor({ state: 'visible', timeout: 10000 });
+  await firstSuggestion.click();
+
+  const setOutletButton = page.locator('#location-modal button', { hasText: 'Set retail outlet' }).first();
+  await setOutletButton.waitFor({ state: 'visible', timeout: 10000 });
+  const name = ((await page.locator('#location-modal .js-dealer-name').first().textContent()) || '').trim();
+  await setOutletButton.click();
+
+  await page.waitForFunction(
+    () => !document.getElementById('location-modal')?.classList.contains('is-open'),
+    undefined,
+    { timeout: 10000 },
+  );
+
+  const code = await page.evaluate(() => {
+    try { return JSON.parse(localStorage.getItem('LOCAL_DEALER'))?.code || ''; } catch { return ''; }
+  });
+  if (!code) {
+    throw new Error(`Retail outlet "${name}" was selected for postcode ${postcode} but no dealer code was saved (LOCAL_DEALER missing in localStorage)`);
+  }
+  console.log(`📍 Retail outlet set: ${name} (dealer code ${code}) for postcode ${postcode}`);
+  return { name, code };
+}
+
 export async function navigateToGenesisForm(page, url) {
-  const resolvedUrl = normalizeGenesisUrl(url);
+  const resolvedUrl = normalizeGenesisUrl(applyTargetEnvironment(url));
   if (resolvedUrl !== url) {
     console.log(`🔀 URL redirected: ${url} → ${resolvedUrl}`);
   }

@@ -149,7 +149,42 @@ export default {
       "Dev": "https://dev.genesis-motors.com.au/au/en/models/gv60-magma-teaser.html",
       "Dev1": "",
       "Stage": "https://stage.genesis-motors.com.au/au/en/models/gv60-magma-teaser.html",
-      "Production": "https://www.genesis.com/au/en/models/gv60-magma-teaser.html"
+      "Production": "https://www.genesis.com/au/en/models/luxury-suv-genesis/gv90/register-your-interest.html"
+    },
+    {
+      "Page": "Genesis BATD",
+      "Dev": "https://dev.genesis-motors.com.au/au/en/support/contact-us.html#bookatestdrive",
+      "Dev1": "",
+      "Stage": "https://stage.genesis-motors.com.au/au/en/support/contact-us.html#bookatestdrive",
+      "Production": "https://www.genesis.com/au/en/support/contact-us.html#bookatestdrive"
+    },
+    {
+      "Page": "Genesis General Enquiry",
+      "Dev": "https://dev.genesis-motors.com.au/au/en/support/contact-us.html#generalenquiry",
+      "Dev1": "",
+      "Stage": "https://stage.genesis-motors.com.au/au/en/support/contact-us.html#generalenquiry",
+      "Production": "https://www.genesis.com/au/en/support/contact-us.html#generalenquiry"
+    },
+    {
+      "Page": "Genesis Download E-Brochure",
+      "Dev": "https://dev.genesis-motors.com.au/au/en/support/contact-us.html#downloadebrochure",
+      "Dev1": "",
+      "Stage": "https://stage.genesis-motors.com.au/au/en/support/contact-us.html#downloadebrochure",
+      "Production": "https://www.genesis.com/au/en/support/contact-us.html#downloadebrochure"
+    },
+    {
+      "Page": "Genesis Book a Service",
+      "Dev": "https://dev.genesis-motors.com.au/au/en/owners/book-a-service.html",
+      "Dev1": "",
+      "Stage": "https://stage.genesis-motors.com.au/au/en/owners/book-a-service.html",
+      "Production": "https://www.genesis.com/au/en/owners/book-a-service.html"
+    },
+    {
+      "Page": "Genesis Subscribe",
+      "Dev": "https://dev.genesis-motors.com.au/au/en/subscribe.html",
+      "Dev1": "",
+      "Stage": "https://stage.genesis-motors.com.au/au/en/subscribe.html",
+      "Production": "https://www.genesis.com/au/en/subscribe.html"
     },
     {
       "Page": "Pip Page",
@@ -366,6 +401,78 @@ export default {
       "Phone number": "0400000000",
       "Postal Code": "3000",
       "Preferred Contact Method": "Email"
+    }
+  ],
+  "Genesis BATD - Test Data": [
+    {
+      "Vehicle Selection": "GV60",
+      "First Name": "Janki",
+      "Last Name": "TheTester",
+      "Email": "TheTester@orchard.com.au",
+      "Contact Number": "0431667796",
+      "Postal Code": "2000",
+      "Preferred Contact Method": "Email",
+      "Time Purchase Dropdown": "Within 3 months",
+      "Terms and Conditions": "Checked"
+    }
+  ],
+  "Genesis General Enquiry - Test Data": [
+    {
+      "Vehicle Selection": "G70",
+      "First Name": "Janki",
+      "Last Name": "TheTester",
+      "Address": "123 Test Street, Sydney",
+      "Email": "TheTester@orchard.com.au",
+      "Postal Code": "2000",
+      "Time Purchase Dropdown": "Within 3 months",
+      "Terms and Conditions": "Checked"
+    }
+  ],
+  "Genesis Download E-Brochure - Test Data": [
+    {
+      "Vehicle Selection": "G70",
+      "First Name": "Janki",
+      "Last Name": "TheTester",
+      "Email": "TheTester@orchard.com.au",
+      "Time Purchase Dropdown": "Within 3 months",
+      "Terms and Conditions": "Checked"
+    }
+  ],
+  "Genesis Book a Service - Test Data": [
+    {
+      "First Name": "Janki",
+      "Last Name": "TheTester",
+      "Email": "TheTester@orchard.com.au",
+      "Contact Number": "0431667796",
+      "Postal Code": "2000",
+      "VIN": "KMTG341AMPU126007",
+      "Registration Number": "ABC123",
+      "Preferred Contact Method": "Email",
+      "Preferred Date": "2026-10-15",
+      "Terms and Conditions": "Checked"
+    }
+  ],
+  "Genesis Subscribe - Test Data": [
+    {
+      "First Name": "Janki",
+      "Last Name": "TheTester",
+      "Email": "TheTester@orchard.com.au",
+      "Contact Number": "0431667796",
+      "Postal Code": "2000",
+      "Preferred Contact Method": "Email",
+      "Time Purchase Dropdown": "Within 3 months",
+      "Terms and Conditions": "Checked"
+    }
+  ],
+  "Genesis RYI Form - Test Data": [
+    {
+      "First Name": "Janki",
+      "Last Name": "TheTester",
+      "Email": "TheTester@orchard.com.au",
+      "Contact Number": "0431667796",
+      "Postal Code": "2000",
+      "Preferred Contact Method": "Email",
+      "Terms and Conditions": "Checked"
     }
   ],
   "Talk to an expert - Test Data": [

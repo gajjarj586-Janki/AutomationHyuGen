@@ -8,6 +8,7 @@ import { setWorldConstructor, Before, After, setDefaultTimeout } from '@cucumber
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 import localTestData from '../test-data/localTestData.js';
+import { getTargetEnvironment } from './targetEnvironment.js';
 import { findByHint, autoHeal, buildFieldSelectors, buildButtonSelectors, buildSelectSelectors, buildCheckboxSelectors } from '../../../utils/autoHealLocator.js';
 
 setDefaultTimeout(180000);
@@ -565,6 +566,7 @@ Before(async function () {
   // CDP captures ALL network traffic including service workers, fetch keepalive, etc.
   this._capturedApiPayloads = [];
   this._cdpRequests = new Map(); // requestId → request data
+  this._cdpPendingBodies = new Map(); // requestId → captured payload awaiting its response body
 
   const cdpSession = await this.page.context().newCDPSession(this.page);
   await cdpSession.send('Network.enable');
@@ -602,10 +604,10 @@ Before(async function () {
           responseHeaders: response.headers || {},
         };
         this._capturedApiPayloads.push(payload);
-        // Try to get response body asynchronously
-        cdpSession.send('Network.getResponseBody', { requestId })
-          .then(body => { payload.responseBody = body.body || ''; })
-          .catch(() => { payload.responseBody = ''; });
+        // The body can only be read once loading has finished — asking for it
+        // here, on headers, often fails and leaves the response empty — so
+        // remember the payload and fetch the body on Network.loadingFinished.
+        this._cdpPendingBodies.set(requestId, payload);
         this._cdpRequests.delete(requestId);
         // Log form-related API responses (check path only, without semicolon path-params)
         const _resPath = (() => { try { return new URL(req.url).pathname.split(';')[0]; } catch { return req.url.split('?')[0].split(';')[0]; } })();
@@ -614,6 +616,15 @@ Before(async function () {
         }
       }
     } catch { /* ignore */ }
+  });
+
+  cdpSession.on('Network.loadingFinished', (params) => {
+    const payload = this._cdpPendingBodies.get(params.requestId);
+    if (!payload) return;
+    this._cdpPendingBodies.delete(params.requestId);
+    cdpSession.send('Network.getResponseBody', { requestId: params.requestId })
+      .then(body => { payload.responseBody = body.base64Encoded ? Buffer.from(body.body || '', 'base64').toString('utf-8') : (body.body || ''); })
+      .catch(() => { payload.responseBody = payload.responseBody || ''; });
   });
 
   // ── Supplementary Playwright native listener ─────────────────────────────
@@ -677,11 +688,14 @@ Before(async function () {
   // Which environment (Dev / Dev1 / Stage / Production) is active is decided
   // solely by TARGET_ENVIRONMENT in .env; that name is also the column used
   // to resolve each page's URL out of the "Environment URLs" table below.
+  // Resolved outside the try below on purpose: an unrecognised value must fail
+  // the scenario, not be swallowed by the Production fallback in the catch.
+  const targetEnv = getTargetEnvironment();
   try {
     const allData = localTestData;
     this.allConfluenceData = allData;
 
-    this.environmentName = (process.env.TARGET_ENVIRONMENT || 'Stage').trim();
+    this.environmentName = targetEnv;
     const envUrls = allData['Environment URLs'] || [];
     this.pageUrls = {};
     for (const row of envUrls) {
@@ -726,7 +740,7 @@ Before(async function () {
   } catch (err) {
     console.error(`⚠️  Failed to load local test data: ${err.message}`);
     console.log('   Falling back to Production defaults');
-    this.environmentName = (process.env.TARGET_ENVIRONMENT || 'Production').trim();
+    this.environmentName = targetEnv;
     this.pageUrls = this.pageUrls || {};
     this.contactUsUrl = this.pageUrls['contact us'] || 'https://www.hyundai.com/au/en/customer-care/contact-us';
     this.contactDealerUrl = this.pageUrls['contact a dealer'] || 'https://www.hyundai.com/au/en/contact-a-dealer';
@@ -786,11 +800,20 @@ After(async function (scenario) {
     // ── Save metadata JSON for report generator ────────────────
     try {
       const formApiCall = findFormSubmissionCall(this._capturedApiPayloads || []);
+      const { id: leadId, label: leadIdLabel } = extractLeadId(formApiCall?.responseBody);
+      this.leadId = leadId;
+      if (formApiCall) {
+        console.log(`📨 Form API response (${formApiCall.statusCode}): ${(formApiCall.responseBody || '').slice(0, 300)}`);
+      }
+      if (leadId) console.log(`🆔 ${leadIdLabel}: ${leadId}`);
       const metadata = {
         testUrl,
         successMessage: this.successMessage || '',
         note: this.scenarioNote || '',
         apiStatusCode: formApiCall?.statusCode || null,
+        leadId,
+        leadIdLabel,
+        apiResponse: (formApiCall?.responseBody || '').slice(0, 2000),
         environment: this.environmentName || '',
       };
       const metadataPath = `screenshots/metadata-${fileKey}.json`;
@@ -848,6 +871,39 @@ After(async function (scenario) {
 });
 
 /**
+ * Pull the identifier out of a form API response body. Genesis forms return
+ * {"success":true,"message":"success","leadId":"00Qe..."}; Book a Service
+ * returns {"id":"500...","success":true,"errors":[]} (a record id, not a
+ * lead). A leadId / lead_id / LeadId__c style key at any depth wins and is
+ * labelled "Lead ID"; otherwise a top-level id / recordId is used and labelled
+ * "Record ID". Returns { id: '', label: '' } when there's none.
+ */
+function extractLeadId(rawResponse) {
+  const none = { id: '', label: '' };
+  if (!rawResponse) return none;
+  let data;
+  try { data = JSON.parse(rawResponse); } catch { return none; }
+  const scalar = (v) => v != null && typeof v !== 'object' && String(v) !== '';
+  const walk = (node, depth) => {
+    if (!node || typeof node !== 'object' || depth > 4) return '';
+    for (const [key, value] of Object.entries(node)) {
+      if (/^lead[_-]?id(__c)?$/i.test(key) && scalar(value)) return String(value);
+    }
+    for (const value of Object.values(node)) {
+      const hit = walk(value, depth + 1);
+      if (hit) return hit;
+    }
+    return '';
+  };
+  const lead = walk(data, 0);
+  if (lead) return { id: lead, label: 'Lead ID' };
+  for (const [key, value] of Object.entries(data && typeof data === 'object' ? data : {})) {
+    if (/^(record[_-]?id|id)$/i.test(key) && scalar(value)) return { id: String(value), label: 'Record ID' };
+  }
+  return none;
+}
+
+/**
  * Find the most relevant form-submission API call from captured payloads.
  * Filters out analytics/tracking calls and picks the main API POST.
  */
@@ -895,6 +951,7 @@ function findFormSubmissionCall(payloads) {
  */
 function buildCombinedHtml(pageScreenshotB64, pageUrl, formApiCall, allPayloads, scenarioName) {
   const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const shorten = (s, max) => (s.length > max ? `${s.slice(0, max)}… (${s.length} chars)` : s);
   const pageImgSrc = pageScreenshotB64 ? `data:image/png;base64,${pageScreenshotB64}` : '';
 
   // Build the "Network" requests list (left sidebar of network panel)
@@ -937,13 +994,13 @@ function buildCombinedHtml(pageScreenshotB64, pageUrl, formApiCall, allPayloads,
       reqBodyHtml = `
         <div style="font-weight:bold;margin-bottom:8px;font-size:12px;">▼ Request Payload</div>
         <div style="background:#f8f8f8;border:1px solid #e0e0e0;border-radius:4px;padding:8px;font-family:monospace;font-size:11px;margin-bottom:12px;">
-          ${entries.map(([k, v]) => `<div style="padding:2px 0;"><span style="color:#881391;">${esc(k)}</span>: <span style="color:#1a1aa6;">${esc(typeof v === 'string' ? `"${v}"` : JSON.stringify(v))}</span></div>`).join('')}
+          ${entries.map(([k, v]) => `<div style="padding:2px 0;"><span style="color:#881391;">${esc(k)}</span>: <span style="color:#1a1aa6;">${esc(typeof v === 'string' ? `"${shorten(v, 80)}"` : JSON.stringify(v))}</span></div>`).join('')}
         </div>`;
     } catch {
       if (reqBody) {
         reqBodyHtml = `
           <div style="font-weight:bold;margin-bottom:8px;font-size:12px;">▼ Request Payload</div>
-          <pre style="background:#f8f8f8;border:1px solid #e0e0e0;border-radius:4px;padding:8px;font-size:11px;white-space:pre-wrap;word-break:break-all;margin-bottom:12px;">${esc(reqBody)}</pre>`;
+          <pre style="background:#f8f8f8;border:1px solid #e0e0e0;border-radius:4px;padding:8px;font-size:11px;white-space:pre-wrap;word-break:break-all;margin-bottom:12px;">${esc(shorten(reqBody, 1500))}</pre>`;
       }
     }
 
@@ -965,8 +1022,15 @@ function buildCombinedHtml(pageScreenshotB64, pageUrl, formApiCall, allPayloads,
         <pre style="background:#fff;border:1px solid #e0e0e0;border-radius:4px;padding:10px;font-size:11px;line-height:1.5;font-family:Consolas,Menlo,monospace;white-space:pre-wrap;word-break:break-word;max-height:520px;overflow:auto;">${colored}</pre>`;
     }
 
+    // Response first: the request payload can be long (reCAPTCHA token,
+    // multipart bodies) and would otherwise push the response, and the lead ID
+    // in it, below the bottom edge of the fixed-height screenshot.
+    const { id: leadId, label: leadIdLabel } = extractLeadId(rawResp);
+    const leadIdHtml = leadId
+      ? `<div style="background:#E6F4EA;border:1px solid #81C995;border-radius:4px;padding:8px 10px;margin-bottom:12px;font-size:12px;color:#137333;"><strong>${esc(leadIdLabel)}:</strong> <span style="font-family:Consolas,Menlo,monospace;">${esc(leadId)}</span></div>`
+      : '';
     payloadHtml = (reqBodyHtml || respBodyHtml)
-      ? `<div style="padding:8px 12px;">${reqBodyHtml}${respBodyHtml}</div>`
+      ? `<div style="padding:8px 12px;">${leadIdHtml}${respBodyHtml}${reqBodyHtml}</div>`
       : '';
   }
 
